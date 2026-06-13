@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.spec
+build/
+dist/
+*.dmg
+*.exe
+*.pkg
+
+# 분석용 임시 스크립트
+analyze_*.py
+dump_sector*.py
+find_sacd_isos.py
+debug_sacd.py
+
+# 백업 파일
+*.bak
+
+# macOS
+.DS_Store
+*.iconset/
+icon_*.png

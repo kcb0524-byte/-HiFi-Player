@@ -1,0 +1,133 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # ── Windows 빌드 ───────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pyinstaller-hooks-contrib
+          pip install PyQt5 numpy scipy sounddevice mutagen
+
+      - name: PyInstaller 빌드
+        run: |
+          pyinstaller `
+            --name "니콘 친게 HiFi Player" `
+            --windowed `
+            --icon icon.ico `
+            --add-data "constants.py;." `
+            --add-data "ui_widgets.py;." `
+            --add-data "player_window.py;." `
+            --add-data "audio_engine.py;." `
+            --add-data "dsd_decoder.py;." `
+            --add-data "sacd_decoder.py;." `
+            --add-data "upnp_browser.py;." `
+            --hidden-import PyQt5 `
+            --hidden-import PyQt5.QtCore `
+            --hidden-import PyQt5.QtGui `
+            --hidden-import PyQt5.QtWidgets `
+            --hidden-import scipy `
+            --hidden-import scipy.signal `
+            --hidden-import sounddevice `
+            --hidden-import mutagen `
+            --hidden-import mutagen.flac `
+            --hidden-import mutagen.mp3 `
+            --hidden-import mutagen.mp4 `
+            --hidden-import mutagen.id3 `
+            --collect-all scipy `
+            --collect-all sounddevice `
+            --noconfirm `
+            main.py
+
+      - name: Inno Setup 설치
+        run: choco install innosetup -y
+
+      - name: 설치 파일 생성 (Inno Setup)
+        run: iscc installer.iss
+
+      - name: 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/니콘_친게_HiFi_Player_Setup.exe
+          retention-days: 30
+
+  # ── macOS 빌드 ────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-14   # Apple Silicon (M1)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: |
+          pip install pyinstaller pyinstaller-hooks-contrib
+          pip install PyQt5 numpy scipy sounddevice mutagen
+
+      - name: PyInstaller 빌드
+        run: |
+          pyinstaller \
+            --name "니콘 친게 HiFi Player" \
+            --windowed \
+            --icon icon.icns \
+            --osx-bundle-identifier com.twsemicon.hifi-player \
+            --add-data "constants.py:." \
+            --add-data "ui_widgets.py:." \
+            --add-data "player_window.py:." \
+            --add-data "audio_engine.py:." \
+            --add-data "dsd_decoder.py:." \
+            --add-data "sacd_decoder.py:." \
+            --add-data "upnp_browser.py:." \
+            --hidden-import PyQt5 \
+            --hidden-import scipy \
+            --hidden-import scipy.signal \
+            --hidden-import sounddevice \
+            --hidden-import mutagen \
+            --collect-all scipy \
+            --collect-all sounddevice \
+            --noconfirm \
+            main.py
+
+      - name: Ad-hoc 코드사이닝
+        run: codesign --force --deep --sign - "dist/니콘 친게 HiFi Player.app"
+
+      - name: DMG 생성
+        run: |
+          brew install create-dmg || true
+          create-dmg \
+            --volname "니콘 친게 HiFi Player" \
+            --window-size 600 400 \
+            --icon-size 128 \
+            --icon "니콘 친게 HiFi Player.app" 150 185 \
+            --app-drop-link 450 185 \
+            "dist/니콘_친게_HiFi_Player-1.0.0.dmg" \
+            "dist/니콘 친게 HiFi Player.app" \
+          || hdiutil create -volname "니콘 친게 HiFi Player" \
+            -srcfolder "dist/니콘 친게 HiFi Player.app" \
+            -ov -format UDZO \
+            "dist/니콘_친게_HiFi_Player-1.0.0.dmg"
+
+      - name: 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/니콘_친게_HiFi_Player-1.0.0.dmg
+          retention-days: 30

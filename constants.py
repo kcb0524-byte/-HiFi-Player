@@ -1,0 +1,245 @@
+"""
+HiFi Player — 색상·스타일시트·EQ 프리셋 상수 모음
+"""
+
+# ─────────────────────────────────────────────────────────────
+# 파라메트릭 EQ 프리셋
+# 포맷: [(type, freq_hz, gain_db, q), ...]
+# type: 'lowshelf' | 'peak' | 'highshelf'
+# ─────────────────────────────────────────────────────────────
+# 8밴드: Low Shelf 60Hz / 125Hz / 250Hz / 500Hz / 1kHz / 2kHz / 4kHz / High Shelf 12kHz
+_F = [
+    ('lowshelf',    60, 0.7),
+    ('peak',       125, 1.0),
+    ('peak',       250, 1.0),
+    ('peak',       500, 1.0),
+    ('peak',      1000, 1.0),
+    ('peak',      2000, 1.0),
+    ('peak',      4000, 1.0),
+    ('highshelf', 12000, 0.7),
+]
+
+def _p(gains):
+    return [(_F[i][0], _F[i][1], gains[i], _F[i][2]) for i in range(8)]
+
+EQ_PRESETS = {
+    "Flat":         _p([ 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0]),
+    "Pop":          _p([ 2.0,  1.5, -1.0,  0.0,  2.0,  2.5,  3.0,  2.0]),
+    "Rock":         _p([ 4.0,  3.0,  2.0, -0.5, -1.0,  1.0,  2.5,  3.0]),
+    "Jazz":         _p([ 3.0,  2.5,  2.0,  0.0, -1.5,  0.0,  1.5, -1.0]),
+    "Classical":    _p([ 2.0,  1.5,  1.0,  0.0,  0.0,  1.0,  1.0,  2.5]),
+    "Vocal":        _p([-2.0, -1.5, -1.5,  2.0,  3.5,  2.5,  2.0,  1.5]),
+    "R&B":          _p([ 4.0,  3.5,  1.5, -0.5, -1.0,  1.5,  2.0,  2.5]),
+    "Electronic":   _p([ 5.0,  3.0,  0.0, -1.0,  0.0,  2.0,  3.0,  4.0]),
+    "Acoustic":     _p([ 2.5,  1.5,  2.0,  1.0,  1.5,  1.5,  1.0,  1.5]),
+    "Bass Boost":   _p([ 6.0,  5.0,  3.0,  1.0,  0.0,  0.0,  0.0,  0.0]),
+    "Treble Boost": _p([ 0.0,  0.0,  0.0,  0.0,  1.0,  2.5,  3.5,  5.0]),
+    "Loudness":     _p([ 5.0,  3.5,  1.5,  0.0, -1.0,  0.5,  2.0,  4.0]),
+    "Custom":       _p([ 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0]),
+}
+
+EQ_BAND_LABELS = ["Low\n60Hz", "125Hz", "250Hz", "500Hz", "1kHz", "2kHz", "4kHz", "High\n12kHz"]
+
+
+# ─────────────────────────────────────────────────────────────
+# 색상 테마 (Roon 스타일 프리미엄 다크)
+# ─────────────────────────────────────────────────────────────
+DARK = {
+    'bg':          '#0a0a0f',   # 거의 순수 블랙
+    'panel':       '#111118',   # 좌측 패널
+    'panel2':      '#0e0e15',   # 우측/리스트 배경
+    'panel3':      '#161620',   # 카드/섹션 배경
+    'border':      '#1e1e2e',   # 매우 은은한 경계
+    'border2':     '#2a2a3a',   # 조금 더 강한 경계
+    'accent':      '#c8a96e',   # 골드 액센트 (Roon 스타일)
+    'accent2':     '#e0c88a',   # 밝은 골드
+    'accent_blue': '#4a9eff',   # 파란 액센트 (포맷 뱃지 등)
+    'text':        '#f0f0f4',   # 밝은 흰색
+    'text_dim':    '#9090b0',   # 보조 텍스트
+    'text_muted':  '#505070',   # 흐린 텍스트
+    'playing':     '#c8a96e',   # 재생 중 = 골드
+    'dsd':         '#e8a030',   # DSD 오렌지
+    'error':       '#ff4a4a',
+    'slider_bg':   '#1e1e2e',
+    'slider_fill': '#c8a96e',   # 골드 슬라이더
+    'btn':         '#16161e',
+    'btn_hover':   '#1e1e2e',
+    'btn_active':  '#2a2a3e',
+    'divider':     '#1a1a28',
+}
+
+STYLESHEET = f"""
+QMainWindow, QWidget {{
+    background-color: {DARK['bg']};
+    color: {DARK['text']};
+    font-family: 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+}}
+QFrame#LeftPanel {{
+    background-color: {DARK['panel']};
+    border-right: 1px solid {DARK['border']};
+}}
+QFrame#RightPanel {{
+    background-color: {DARK['bg']};
+}}
+QFrame#ArtCard {{
+    background-color: {DARK['panel3']};
+    border-radius: 12px;
+}}
+QFrame#InfoSection {{
+    background-color: transparent;
+}}
+QFrame#ControlBar {{
+    background-color: {DARK['panel']};
+    border-top: 1px solid {DARK['border']};
+}}
+QFrame#HifiSection {{
+    background-color: {DARK['panel3']};
+    border: 1px solid {DARK['border']};
+    border-radius: 10px;
+}}
+QFrame#EQSection {{
+    background-color: {DARK['panel3']};
+    border: 1px solid {DARK['border']};
+    border-radius: 10px;
+}}
+QListWidget {{
+    background-color: {DARK['panel2']};
+    border: 1px solid {DARK['border']};
+    border-radius: 8px;
+    color: {DARK['text']};
+    font-size: 13px;
+    outline: none;
+}}
+QListWidget::item {{
+    padding: 9px 12px;
+    border-bottom: 1px solid {DARK['bg']};
+}}
+QListWidget::item:selected {{
+    background-color: #1e1a10;
+    color: {DARK['accent']};
+}}
+QListWidget::item:hover {{
+    background-color: {DARK['btn_hover']};
+}}
+QPushButton {{
+    background-color: {DARK['btn']};
+    color: {DARK['text_dim']};
+    border: 1px solid {DARK['border']};
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+}}
+QPushButton:hover {{
+    background-color: {DARK['btn_hover']};
+    color: {DARK['text']};
+    border-color: {DARK['border2']};
+}}
+QPushButton:pressed {{
+    background-color: {DARK['btn_active']};
+}}
+QPushButton#PlayBtn {{
+    background-color: {DARK['accent']};
+    color: #0a0a0f;
+    border: none;
+    border-radius: 26px;
+    font-size: 22px;
+    font-weight: bold;
+    min-width: 52px;
+    min-height: 52px;
+    max-width: 52px;
+    max-height: 52px;
+}}
+QPushButton#PlayBtn:hover {{
+    background-color: {DARK['accent2']};
+}}
+QPushButton#PlayBtn:pressed {{
+    background-color: #a08040;
+}}
+QPushButton#TransportBtn {{
+    background-color: transparent;
+    color: {DARK['text_dim']};
+    border: none;
+    border-radius: 20px;
+    font-size: 18px;
+    min-width: 40px;
+    min-height: 40px;
+    max-width: 40px;
+    max-height: 40px;
+}}
+QPushButton#TransportBtn:hover {{
+    background-color: {DARK['btn_hover']};
+    color: {DARK['text']};
+}}
+QSlider::groove:horizontal {{
+    height: 3px;
+    background: {DARK['border2']};
+    border-radius: 1px;
+}}
+QSlider::sub-page:horizontal {{
+    background: {DARK['accent']};
+    border-radius: 1px;
+}}
+QSlider::handle:horizontal {{
+    background: {DARK['accent2']};
+    border: none;
+    width: 12px;
+    height: 12px;
+    margin: -5px 0;
+    border-radius: 6px;
+}}
+QSlider::handle:horizontal:hover {{
+    background: white;
+    width: 14px;
+    height: 14px;
+    margin: -6px 0;
+    border-radius: 7px;
+}}
+QComboBox {{
+    background-color: {DARK['btn']};
+    color: {DARK['text_dim']};
+    border: 1px solid {DARK['border']};
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 13px;
+}}
+QComboBox:hover {{
+    border-color: {DARK['border2']};
+    color: {DARK['text']};
+}}
+QComboBox QAbstractItemView {{
+    background-color: {DARK['panel3']};
+    color: {DARK['text']};
+    border: 1px solid {DARK['border2']};
+    selection-background-color: {DARK['btn_active']};
+    padding: 4px;
+}}
+QLabel {{
+    color: {DARK['text']};
+    background: transparent;
+}}
+QScrollBar:vertical {{
+    background: transparent;
+    width: 5px;
+    border-radius: 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {DARK['border2']};
+    border-radius: 2px;
+    min-height: 30px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {DARK['text_muted']};
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+}}
+QScrollBar:horizontal {{
+    height: 0px;
+}}
+QSplitter::handle {{
+    background: {DARK['border']};
+}}
+"""
+
+
