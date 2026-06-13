@@ -26,11 +26,10 @@ DefaultGroupName={#AppNameKor}
 AllowNoIcons=yes
 OutputDir=dist
 OutputBaseFilename=니콘_친게_HiFi_Player_Setup_{#AppVersion}
-SetupIconFile=icon_256.png
+SetupIconFile=icon.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-WizardSmallImageFile=icon_256.png
 ; Windows 10/11 이상 필요
 MinVersion=10.0
 ArchitecturesInstallIn64BitMode=x64
