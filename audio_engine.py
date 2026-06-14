@@ -34,6 +34,12 @@ except ImportError:
     MA_AVAILABLE = False
 
 try:
+    import sounddevice as sd
+    SD_AVAILABLE = True
+except ImportError:
+    SD_AVAILABLE = False
+
+try:
     import soundfile as sf
     SF_AVAILABLE = True
 except ImportError:
@@ -421,23 +427,48 @@ class AudioEngine:
     @staticmethod
     def get_output_devices() -> list:
         devices = []
-        if not MA_AVAILABLE:
-            return devices
-        try:
-            all_devs = miniaudio.Devices()
-            playback = all_devs.get_playbacks()
-            for d in playback:
-                dev = AudioDevice(
-                    index=d['id'],
-                    name=d['name'],
-                    max_output_channels=d.get('maxChannels', 2),
-                    default_samplerate=d.get('minSampleRate', 44100),
-                    hostapi_name='',
-                )
-                dev.device_id = d['id']
-                devices.append(dev)
-        except Exception as e:
-            print(f'[Device] 장치 목록 조회 실패: {e}')
+
+        # Windows: sounddevice(PortAudio) 우선 — WASAPI 장치를 가장 안정적으로 열거
+        if _IS_WIN and SD_AVAILABLE:
+            try:
+                all_devs = sd.query_devices()
+                hostapis = sd.query_hostapis()
+                for idx, d in enumerate(all_devs):
+                    if d['max_output_channels'] < 1:
+                        continue
+                    ha_name = hostapis[d['hostapi']]['name'] if d['hostapi'] < len(hostapis) else ''
+                    dev = AudioDevice(
+                        index=idx,
+                        name=d['name'],
+                        max_output_channels=d['max_output_channels'],
+                        default_samplerate=int(d['default_samplerate']),
+                        hostapi_name=ha_name,
+                    )
+                    dev.device_id = idx
+                    devices.append(dev)
+                if devices:
+                    return devices
+            except Exception as e:
+                print(f'[Device] sounddevice 장치 목록 조회 실패: {e}')
+
+        # macOS / Linux: miniaudio
+        if MA_AVAILABLE:
+            try:
+                all_devs = miniaudio.Devices()
+                playback = all_devs.get_playbacks()
+                for d in playback:
+                    dev = AudioDevice(
+                        index=d['id'],
+                        name=d['name'],
+                        max_output_channels=d.get('maxChannels', 2),
+                        default_samplerate=d.get('minSampleRate', 44100),
+                        hostapi_name='',
+                    )
+                    dev.device_id = d['id']
+                    devices.append(dev)
+            except Exception as e:
+                print(f'[Device] miniaudio 장치 목록 조회 실패: {e}')
+
         return devices
 
     @staticmethod
@@ -1126,30 +1157,41 @@ class AudioEngine:
         if self._device_index is not None:
             device_id = self._device_index
 
-        # ── 시도 순서: WASAPI Exclusive → WASAPI Shared → 기본값 ──
+        # ── 시도 순서 결정 ──
+        # Windows: sounddevice(PortAudio/WASAPI) → WASAPI Exclusive → miniaudio shared → 기본
+        # macOS  : miniaudio CoreAudio → miniaudio 기본
         open_attempts = []
 
-        if _IS_WIN and self._exclusive_mode and MA_AVAILABLE:
-            open_attempts.append(('wasapi_exclusive', device_id))
-
-        # 공유 모드(fallback) — 항상 포함
-        open_attempts.append(('shared', device_id))
-
-        # device_id 지정 시, 그것도 실패하면 기본 장치로 한 번 더
-        if device_id is not None:
-            open_attempts.append(('shared', None))
+        if _IS_WIN:
+            open_attempts.append(('sounddevice', device_id))
+            if self._exclusive_mode and MA_AVAILABLE:
+                open_attempts.append(('wasapi_exclusive', device_id))
+            if MA_AVAILABLE:
+                open_attempts.append(('miniaudio_shared', device_id))
+            if device_id is not None and MA_AVAILABLE:
+                open_attempts.append(('miniaudio_shared', None))
+        else:
+            if MA_AVAILABLE:
+                open_attempts.append(('miniaudio_coreaudio', device_id))
+            if MA_AVAILABLE and device_id is not None:
+                open_attempts.append(('miniaudio_coreaudio', None))
 
         last_error = None
         for mode, dev_id in open_attempts:
             try:
-                if mode == 'wasapi_exclusive':
+                if mode == 'sounddevice':
+                    self._device = _SounddevicePlayer(
+                        sample_rate=out_sr,
+                        nchannels=out_channels,
+                        device_index=dev_id,
+                    )
+                elif mode == 'wasapi_exclusive':
                     self._device = _WasapiExclusiveDevice(
                         sample_rate=out_sr,
                         nchannels=out_channels,
                         device_id=dev_id,
                     )
                 else:
-                    # WASAPI shared / CoreAudio / 기본 백엔드
                     backends = []
                     if _IS_MAC:
                         backends = [miniaudio.Backend.COREAUDIO]
@@ -1166,14 +1208,13 @@ class AudioEngine:
                         thread_prio=miniaudio.ThreadPriority.HIGHEST,
                     )
 
-                print(f'[Device] 열림({mode}) — SR={out_sr} ch={out_channels} '
-                      f'dev_id={dev_id}')
+                print(f'[Device] 열림({mode}) — SR={out_sr} ch={out_channels} dev_id={dev_id}')
                 self._start_permanent_generator()
                 last_error = None
                 break  # 성공
 
             except Exception as e:
-                print(f'[Device] {mode} 실패({e})')
+                print(f'[Device] {mode} 실패: {e}')
                 self._device = None
                 last_error = e
 
@@ -1636,6 +1677,101 @@ class AudioEngine:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# sounddevice (PortAudio) 기반 재생 장치 — Windows 우선 백엔드
+# miniaudio보다 Windows WASAPI 호환성이 훨씬 높음
+# ─────────────────────────────────────────────────────────────────────────────
+class _SounddevicePlayer:
+    """
+    sounddevice(PortAudio)를 사용한 Windows 전용 재생 장치.
+    miniaudio 인터페이스와 동일한 start(generator)/close() API를 제공한다.
+
+    generator는 frames 수를 send()로 받아 numpy float32 배열 (frames×channels)을
+    yield 하는 제너레이터여야 한다.
+    """
+
+    def __init__(self, sample_rate: int, nchannels: int, device_index=None):
+        self.sample_rate = sample_rate
+        self.nchannels = nchannels
+        self.backend = 'sounddevice-PortAudio'
+        self._device_index = device_index
+        self._generator = None
+        self._stream = None
+        self._lock = __import__('threading').Lock()
+        self._closed = False
+
+    # ── start ──────────────────────────────────────────────────────────────
+    def start(self, callback_generator):
+        """callback_generator: AudioEngine._permanent_generator() 와 같은 제너레이터"""
+        import numpy as np
+        import sounddevice as sd
+
+        self._generator = callback_generator
+        blocksize = int(self.sample_rate * 0.05)   # 50 ms
+
+        # sounddevice device index 검증
+        dev_idx = self._device_index
+        if dev_idx is not None:
+            try:
+                devs = sd.query_devices()
+                if dev_idx >= len(devs):
+                    dev_idx = None
+            except Exception:
+                dev_idx = None
+
+        def _cb(outdata, frames, time_info, status):
+            if status:
+                print(f'[SD] status={status}')
+            with self._lock:
+                if self._closed or self._generator is None:
+                    outdata[:] = 0
+                    return
+                try:
+                    chunk = self._generator.send(frames)
+                    if chunk is None or len(chunk) == 0:
+                        outdata[:] = 0
+                    else:
+                        arr = np.asarray(chunk, dtype='float32')
+                        # 채널 수 맞추기
+                        if arr.ndim == 1:
+                            arr = arr.reshape(-1, 1)
+                            if self.nchannels > 1:
+                                arr = np.repeat(arr, self.nchannels, axis=1)
+                        got = min(frames, arr.shape[0])
+                        outdata[:got] = arr[:got]
+                        if got < frames:
+                            outdata[got:] = 0
+                except StopIteration:
+                    outdata[:] = 0
+                except Exception as e:
+                    print(f'[SD] callback 오류: {e}')
+                    outdata[:] = 0
+
+        self._stream = sd.OutputStream(
+            samplerate=self.sample_rate,
+            channels=self.nchannels,
+            dtype='float32',
+            blocksize=blocksize,
+            device=dev_idx,
+            callback=_cb,
+        )
+        self._stream.start()
+        print(f'[SD] OutputStream 시작 — SR={self.sample_rate} ch={self.nchannels} dev={dev_idx}')
+
+    # ── close ──────────────────────────────────────────────────────────────
+    def close(self):
+        with self._lock:
+            self._closed = True
+        if self._stream:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception as e:
+                print(f'[SD] close 오류: {e}')
+            self._stream = None
+        print('[SD] OutputStream 닫힘')
+
+
 # WASAPI Exclusive 장치 (Windows 전용)
 # miniaudio.PlaybackDevice를 서브클래싱하지 않고,
 # ffi/lib를 직접 사용해 ma_device_config에 exclusive shareMode를 주입
