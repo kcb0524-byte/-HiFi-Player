@@ -436,8 +436,8 @@ class AudioEngine:
                 )
                 dev.device_id = d['id']
                 devices.append(dev)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f'[Device] 장치 목록 조회 실패: {e}')
         return devices
 
     @staticmethod
@@ -535,30 +535,55 @@ class AudioEngine:
     def _load_pcm_via_ffmpeg(self, filepath: str):
         """ffmpeg subprocess로 PCM 디코딩 (APE, WMA, TTA 등 soundfile 미지원 포맷용)"""
         import subprocess, shutil
-        # 1순위: 앱 번들 내 동봉된 ffmpeg (PyInstaller 빌드 시)
-        _bundle_ffmpeg = os.path.join(os.path.dirname(sys.executable), 'ffmpeg')
-        # Homebrew(Apple Silicon/Intel) 및 일반 경로 순서로 탐색
+        # PyInstaller 번들 내 ffmpeg (macOS: ffmpeg, Windows: ffmpeg.exe)
+        _exe_dir = os.path.dirname(sys.executable)
+        _bundle_ffmpeg_win = os.path.join(_exe_dir, 'ffmpeg.exe')
+        _bundle_ffmpeg_mac = os.path.join(_exe_dir, 'ffmpeg')
+
+        # Windows 추가 탐색 경로
+        _win_paths = []
+        if _IS_WIN:
+            _win_paths = [
+                r'C:\ProgramData\chocolatey\bin\ffmpeg.exe',
+                r'C:\ffmpeg\bin\ffmpeg.exe',
+                r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
+                r'C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe',
+            ]
+
         ffmpeg_bin = None
         for candidate in [
-            _bundle_ffmpeg,
+            _bundle_ffmpeg_win,
+            _bundle_ffmpeg_mac,
             shutil.which('ffmpeg'),
             '/opt/homebrew/bin/ffmpeg',
             '/usr/local/bin/ffmpeg',
             '/usr/bin/ffmpeg',
+            *_win_paths,
         ]:
             if candidate and os.path.isfile(candidate):
                 ffmpeg_bin = candidate
                 break
         if ffmpeg_bin is None:
-            raise RuntimeError("ffmpeg를 찾을 수 없습니다. brew install ffmpeg 또는 PATH 확인 필요")
+            if _IS_WIN:
+                raise RuntimeError("ffmpeg를 찾을 수 없습니다. 설치 파일에 ffmpeg가 포함되지 않았을 수 있습니다.")
+            else:
+                raise RuntimeError("ffmpeg를 찾을 수 없습니다. brew install ffmpeg 또는 PATH 확인 필요")
 
-        # 먼저 샘플레이트·채널 수를 ffprobe로 확인
-        ffprobe_bin = (
-            shutil.which('ffprobe') or
-            ('/opt/homebrew/bin/ffprobe' if os.path.exists('/opt/homebrew/bin/ffprobe') else None) or
-            ('/usr/local/bin/ffprobe' if os.path.exists('/usr/local/bin/ffprobe') else None) or
-            ffmpeg_bin  # ffprobe 없으면 ffmpeg로 대체
-        )
+        # ffprobe 탐색 (ffmpeg과 같은 디렉토리 우선)
+        _ffmpeg_dir = os.path.dirname(ffmpeg_bin)
+        _ffprobe_name = 'ffprobe.exe' if _IS_WIN else 'ffprobe'
+        _ffprobe_same_dir = os.path.join(_ffmpeg_dir, _ffprobe_name)
+
+        ffprobe_bin = None
+        for candidate in [
+            _ffprobe_same_dir,
+            shutil.which('ffprobe'),
+            '/opt/homebrew/bin/ffprobe',
+            '/usr/local/bin/ffprobe',
+        ]:
+            if candidate and os.path.isfile(candidate):
+                ffprobe_bin = candidate
+                break
         probe_cmd = [
             ffprobe_bin, '-v', 'quiet', '-print_format', 'json',
             '-show_streams', filepath
@@ -1097,62 +1122,63 @@ class AudioEngine:
                 _ca_set_buffer_size(ca_dev, 512)
             self._ca_hogged = False  # Hog 미사용
 
-        try:
-            device_id = None
-            if self._device_index is not None:
-                device_id = self._device_index
+        device_id = None
+        if self._device_index is not None:
+            device_id = self._device_index
 
-            if _IS_WIN and self._exclusive_mode and MA_AVAILABLE:
-                # ── Windows: WASAPI Exclusive ──────────────────────────
-                # miniaudio PlaybackDevice를 직접 생성하지 않고
-                # ffi/lib로 ma_device_config를 조작한 뒤 초기화
-                self._device = _WasapiExclusiveDevice(
-                    sample_rate=out_sr,
-                    nchannels=out_channels,
-                    device_id=device_id,
-                )
-            else:
-                # macOS / Linux: 표준 경로 (CoreAudio 독점은 위에서 이미 설정)
-                self._device = miniaudio.PlaybackDevice(
-                    output_format=miniaudio.SampleFormat.FLOAT32,
-                    nchannels=out_channels,
-                    sample_rate=out_sr,
-                    buffersize_msec=50,   # 독점 모드에서 버퍼 최소화
-                    device_id=device_id,
-                    backends=(
-                        [miniaudio.Backend.COREAUDIO] if _IS_MAC else None
-                    ) or [],
-                    thread_prio=miniaudio.ThreadPriority.REALTIME,
-                )
+        # ── 시도 순서: WASAPI Exclusive → WASAPI Shared → 기본값 ──
+        open_attempts = []
 
-            print(f'[Device] 열림 — SR={out_sr} ch={out_channels} '
-                  f'backend={getattr(self._device, "backend", "?")} '
-                  f'exclusive={self._exclusive_mode}')
-            self._start_permanent_generator()
+        if _IS_WIN and self._exclusive_mode and MA_AVAILABLE:
+            open_attempts.append(('wasapi_exclusive', device_id))
 
-        except Exception as e:
-            self._device = None
-            # Exclusive 모드 실패 시 공유 모드로 fallback
-            if self._exclusive_mode:
-                print(f'[Device] Exclusive 실패({e}), 공유 모드로 재시도')
-                try:
+        # 공유 모드(fallback) — 항상 포함
+        open_attempts.append(('shared', device_id))
+
+        # device_id 지정 시, 그것도 실패하면 기본 장치로 한 번 더
+        if device_id is not None:
+            open_attempts.append(('shared', None))
+
+        last_error = None
+        for mode, dev_id in open_attempts:
+            try:
+                if mode == 'wasapi_exclusive':
+                    self._device = _WasapiExclusiveDevice(
+                        sample_rate=out_sr,
+                        nchannels=out_channels,
+                        device_id=dev_id,
+                    )
+                else:
+                    # WASAPI shared / CoreAudio / 기본 백엔드
+                    backends = []
+                    if _IS_MAC:
+                        backends = [miniaudio.Backend.COREAUDIO]
+                    elif _IS_WIN:
+                        backends = [miniaudio.Backend.WASAPI]
+
                     self._device = miniaudio.PlaybackDevice(
                         output_format=miniaudio.SampleFormat.FLOAT32,
                         nchannels=out_channels,
                         sample_rate=out_sr,
                         buffersize_msec=100,
-                        device_id=device_id,
+                        device_id=dev_id,
+                        backends=backends or [],
                         thread_prio=miniaudio.ThreadPriority.HIGHEST,
                     )
-                    self._start_permanent_generator()
-                    print('[Device] 공유 모드로 열림 (fallback)')
-                except Exception as e2:
-                    self._device = None
-                    if self.on_error:
-                        self.on_error(f'장치 오류: {e2}')
-            else:
-                if self.on_error:
-                    self.on_error(f'장치 오류: {e}')
+
+                print(f'[Device] 열림({mode}) — SR={out_sr} ch={out_channels} '
+                      f'dev_id={dev_id}')
+                self._start_permanent_generator()
+                last_error = None
+                break  # 성공
+
+            except Exception as e:
+                print(f'[Device] {mode} 실패({e})')
+                self._device = None
+                last_error = e
+
+        if last_error is not None and self.on_error:
+            self.on_error(f'오디오 장치를 열 수 없습니다: {last_error}')
 
     def _close_device(self):
         # macOS CoreAudio 독점 해제

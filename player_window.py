@@ -771,12 +771,17 @@ class HiFiPlayer(QMainWindow):
         return ''
 
     def _load_devices(self):
+        import platform as _platform
         self.device_combo.blockSignals(True)
         self.device_combo.clear()
         self._devices: List[AudioDevice] = []
 
-        # 실제 macOS 기본 출력 장치명 가져오기
-        default_name = self._get_macos_default_output_name()
+        # macOS에서만 system_profiler로 기본 장치명 읽기
+        if _platform.system() == 'Darwin':
+            default_name = self._get_macos_default_output_name()
+        else:
+            default_name = ''
+
         default_label = f"🔊  {default_name}" if default_name else "🔊  시스템 기본"
         self.device_combo.addItem(default_label)
         self._devices.append(None)
@@ -784,10 +789,13 @@ class HiFiPlayer(QMainWindow):
         devices = AudioEngine.get_output_devices()
 
         for dev in devices:
-            # 기본 출력 장치와 같은 이름이면 목록에서 제외 (중복 방지)
+            # 기본 출력 장치와 같은 이름이면 목록에서 제외 (중복 방지, macOS만)
             if default_name and dev.name == default_name:
                 continue
-            icon = "🎧" if any(k in dev.name.lower() for k in ('dac', 'usb', 'external', 'pro', 'focusrite', 'topping', 'schiit', 'chord')) else "🔈"
+            dac_keywords = ('dac', 'usb', 'external', 'pro', 'focusrite',
+                            'topping', 'schiit', 'chord', 'fiio', 'smsl',
+                            'realtek', 'speakers', 'headphone')
+            icon = "🎧" if any(k in dev.name.lower() for k in dac_keywords) else "🔈"
             self.device_combo.addItem(f"{icon}  {dev.display_name()}")
             self._devices.append(dev)
 
