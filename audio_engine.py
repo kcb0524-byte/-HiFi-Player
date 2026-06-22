@@ -1114,7 +1114,8 @@ class AudioEngine:
         force_restart=True: 항상 닫고 새로 열기
         force_restart=False: SR/채널 같으면 재사용
         """
-        if not MA_AVAILABLE:
+        # sounddevice는 MA_AVAILABLE 없이도 동작 — Windows에서는 계속 진행
+        if not MA_AVAILABLE and not (_IS_WIN and SD_AVAILABLE):
             return
 
         out_channels = min(self._channels, 2)
