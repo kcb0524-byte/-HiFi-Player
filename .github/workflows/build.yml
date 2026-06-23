@@ -73,9 +73,20 @@ jobs:
           path: dist/니콘_친게_HiFi_Player_Setup_1.0.0.exe
           retention-days: 30
 
-  # ── macOS 빌드 ────────────────────────────────────────────────
+  # ── macOS 빌드 (공통 스텝을 matrix로 처리) ──────────────────
   build-macos:
-    runs-on: macos-14   # Apple Silicon (M1)
+    strategy:
+      matrix:
+        include:
+          - runs-on: macos-14    # Apple Silicon (M1/M2/M3)
+            arch: arm64
+            artifact: macos-dmg-arm64
+            dmg: 니콘_친게_HiFi_Player-1.0.0-arm64.dmg
+          - runs-on: macos-13    # Intel x86_64
+            arch: x86_64
+            artifact: macos-dmg-x86_64
+            dmg: 니콘_친게_HiFi_Player-1.0.0-x86_64.dmg
+    runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v4
 
@@ -127,11 +138,11 @@ jobs:
           hdiutil create -volname "니콘 친게 HiFi Player" \
             -srcfolder "dist/니콘 친게 HiFi Player.app" \
             -ov -format UDZO \
-            "dist/니콘_친게_HiFi_Player-1.0.0.dmg"
+            "dist/${{ matrix.dmg }}"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg
-          path: dist/니콘_친게_HiFi_Player-1.0.0.dmg
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.dmg }}
           retention-days: 30
