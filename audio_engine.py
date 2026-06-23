@@ -1748,8 +1748,27 @@ class _SounddevicePlayer:
                     print(f'[SD] callback 오류: {e}')
                     outdata[:] = 0
 
+        # 장치가 지원하는 샘플레이트 확인 후 fallback
+        target_sr = self.sample_rate
+        supported_srs = [384000, 352800, 192000, 176400, 96000, 88200, 48000, 44100]
+        if target_sr not in supported_srs:
+            # 가장 가까운 지원 SR로 내림
+            target_sr = min(supported_srs, key=lambda x: abs(x - target_sr) if x <= target_sr else float('inf'))
+            if target_sr == float('inf'):
+                target_sr = 48000
+            print(f'[SD] SR {self.sample_rate} 미지원 → {target_sr} 으로 fallback')
+
+        # 장치가 실제로 해당 SR을 지원하는지 확인
+        try:
+            if dev_idx is not None:
+                sd.check_output_settings(device=dev_idx, channels=self.nchannels,
+                                         dtype='float32', samplerate=target_sr)
+        except Exception:
+            target_sr = 48000
+            print(f'[SD] 장치 SR 검증 실패 → 48000으로 fallback')
+
         self._stream = sd.OutputStream(
-            samplerate=self.sample_rate,
+            samplerate=target_sr,
             channels=self.nchannels,
             dtype='float32',
             blocksize=blocksize,
@@ -1757,7 +1776,7 @@ class _SounddevicePlayer:
             callback=_cb,
         )
         self._stream.start()
-        print(f'[SD] OutputStream 시작 — SR={self.sample_rate} ch={self.nchannels} dev={dev_idx}')
+        print(f'[SD] OutputStream 시작 — SR={target_sr} ch={self.nchannels} dev={dev_idx}')
 
     # ── close ──────────────────────────────────────────────────────────────
     def close(self):
