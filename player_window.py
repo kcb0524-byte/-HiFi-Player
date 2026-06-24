@@ -809,6 +809,7 @@ class HiFiPlayer(QMainWindow):
         device_index = dev.index if dev else None
         device_name = dev.name if dev else ''
         self.engine.set_output_device(device_index, device_name)
+        self._save_settings()  # 장치 변경 시 즉시 저장
 
     # ─────────────────────────────────────────────
     # 파일 추가
@@ -1567,6 +1568,16 @@ class HiFiPlayer(QMainWindow):
                 self.toggle_rg.setEnabled(False)
                 self.toggle_dither.setEnabled(False)
                 self.combo_upsample.setEnabled(False)
+            # 출력 장치 복원
+            saved_dev_name = data.get('output_device_name', '')
+            if saved_dev_name:
+                for i, dev in enumerate(self._devices):
+                    if dev and dev.name == saved_dev_name:
+                        self.device_combo.blockSignals(True)
+                        self.device_combo.setCurrentIndex(i)
+                        self.device_combo.blockSignals(False)
+                        self.engine.set_output_device(dev.index, dev.name)
+                        break
             # 플레이리스트 복원
             playlist_paths = data.get('playlist', [])
             saved_index    = data.get('current_index', -1)
@@ -1617,6 +1628,11 @@ class HiFiPlayer(QMainWindow):
                 t = self._track_at(i)
                 if t:
                     playlist_paths.append(t.filepath)
+            # 현재 선택된 출력 장치 이름 저장
+            cur_dev_idx = self.device_combo.currentIndex()
+            cur_dev = self._devices[cur_dev_idx] if 0 <= cur_dev_idx < len(self._devices) else None
+            saved_device_name = cur_dev.name if cur_dev else ''
+
             data = {
                 'volume':         self.vol_slider.value(),
                 'eq_enabled':     self.eq_panel.get_enabled(),
@@ -1632,6 +1648,8 @@ class HiFiPlayer(QMainWindow):
                 'dither':         self.toggle_dither.isChecked(),
                 'upsample_idx':   self.combo_upsample.currentIndex(),
                 'rg_enabled':     self.toggle_rg.isChecked(),
+                # 출력 장치
+                'output_device_name': saved_device_name,
             }
             with open(self.SETTINGS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)

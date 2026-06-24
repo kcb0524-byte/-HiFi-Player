@@ -1784,7 +1784,7 @@ class PlaylistWidget(QListWidget):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
-        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDragDropMode(QAbstractItemView.DragDrop)  # 외부 파일 드롭 허용
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
