@@ -506,10 +506,11 @@ class AudioEngine:
         if basename.startswith('._'):
             raise RuntimeError(f"macOS 리소스 파일: {basename}")
 
-        # 1. 상태 idle + 전환 플래그
+        # 1. 상태 idle + 전환 플래그 + RG 게인 리셋 (스파이크 방지)
         with self._lock:
             self._transitioning = True
             self._state = 'idle'
+            self._rg_gain = 1.0   # 새 트랙 로드 전까지 1.0 유지 → 볼륨 스파이크 방지
 
         # 2. DSD 디코더 완전히 멈추기
         self._decode_stop.set()
@@ -1376,7 +1377,13 @@ class AudioEngine:
                 if len(dop_out) < n:
                     pad = np.zeros((n - len(dop_out), out_ch), dtype=np.float32)
                     dop_out = np.concatenate([dop_out, pad], axis=0)
-                frames = yield dop_out[:n].astype(np.float32)
+                # DoP: 비트퍼펙트가 아닐 때 볼륨/RG 적용
+                if not self._bit_perfect:
+                    _vol = self._volume * (self._rg_gain if self._rg_enabled else 1.0)
+                    dop_out = np.clip(dop_out[:n] * _vol, -1.0, 1.0).astype(np.float32)
+                else:
+                    dop_out = dop_out[:n].astype(np.float32)
+                frames = yield dop_out
                 continue
 
             # ── 비트퍼펙트 모드: 모든 처리 bypass, 원본 그대로 ──
@@ -1748,24 +1755,45 @@ class _SounddevicePlayer:
                     print(f'[SD] callback 오류: {e}')
                     outdata[:] = 0
 
-        # 장치가 지원하는 샘플레이트 확인 후 fallback
-        target_sr = self.sample_rate
-        supported_srs = [384000, 352800, 192000, 176400, 96000, 88200, 48000, 44100]
-        if target_sr not in supported_srs:
-            # 가장 가까운 지원 SR로 내림
-            target_sr = min(supported_srs, key=lambda x: abs(x - target_sr) if x <= target_sr else float('inf'))
-            if target_sr == float('inf'):
-                target_sr = 48000
-            print(f'[SD] SR {self.sample_rate} 미지원 → {target_sr} 으로 fallback')
+        # 장치가 지원하는 샘플레이트를 순서대로 탐색 (요청 SR부터 내림차순 fallback)
+        requested_sr = self.sample_rate
+        # 표준 SR 목록 (높은 것부터)
+        all_standard_srs = [384000, 352800, 192000, 176400, 96000, 88200, 48000, 44100]
 
-        # 장치가 실제로 해당 SR을 지원하는지 확인
-        try:
-            if dev_idx is not None:
-                sd.check_output_settings(device=dev_idx, channels=self.nchannels,
-                                         dtype='float32', samplerate=target_sr)
-        except Exception:
-            target_sr = 48000
-            print(f'[SD] 장치 SR 검증 실패 → 48000으로 fallback')
+        def _try_sr(sr, dev):
+            """해당 SR이 장치에서 사용 가능한지 확인"""
+            try:
+                sd.check_output_settings(
+                    device=dev, channels=self.nchannels,
+                    dtype='float32', samplerate=float(sr)
+                )
+                return True
+            except Exception:
+                return False
+
+        # 1단계: 요청 SR 그대로 시도
+        target_sr = requested_sr
+        if dev_idx is not None and not _try_sr(target_sr, dev_idx):
+            # 2단계: 요청 SR 이하의 표준 SR을 높은 것부터 시도
+            fallback_srs = [s for s in all_standard_srs if s <= requested_sr and s != requested_sr]
+            # 요청 SR보다 높은 표준 SR도 시도 (192000 요청 시 장치가 192000 대신 96000만 지원하는 경우)
+            fallback_srs += [s for s in all_standard_srs if s > requested_sr]
+            target_sr = None
+            for sr in fallback_srs:
+                if _try_sr(sr, dev_idx):
+                    target_sr = sr
+                    print(f'[SD] SR {requested_sr} 미지원 → {sr} 으로 fallback')
+                    break
+            if target_sr is None:
+                target_sr = 48000
+                print(f'[SD] 모든 SR 실패 → 48000으로 최종 fallback')
+        elif dev_idx is None:
+            # 장치 미지정 시 표준 SR 목록에서 가장 가까운 값 사용
+            if requested_sr not in all_standard_srs:
+                target_sr = min(all_standard_srs,
+                                key=lambda x: abs(x - requested_sr) if x <= requested_sr else float('inf'))
+                if target_sr == float('inf'):
+                    target_sr = 48000
 
         self._stream = sd.OutputStream(
             samplerate=target_sr,

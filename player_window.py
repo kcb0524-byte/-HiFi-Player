@@ -75,6 +75,9 @@ class HiFiPlayer(QMainWindow):
         self._load_devices()
         self._load_settings()
 
+        # Windows: DWM API로 타이틀바 다크 모드 적용
+        self._apply_dark_titlebar()
+
         # 글로벌 키보드 이벤트 필터 — 어떤 위젯이 포커스를 가져도 동작
         QApplication.instance().installEventFilter(self)
 
@@ -880,12 +883,14 @@ class HiFiPlayer(QMainWindow):
             # 다이얼로그 없이 전체 트랙 추가
             selected_tracks = tracks
 
-        # 이미 추가된 트랙 집합
+        # 이미 추가된 트랙 집합 (ISO 파일 경로 + 트랙 인덱스로 구별)
         existing = set()
         for i in range(self.playlist.count()):
             ti = self._track_at(i)
             if ti:
-                existing.add((ti.filepath, getattr(ti, '_sacd_track_info', {}).get('index', -1)))
+                sti = ti._sacd_track_info
+                track_idx = sti['index'] if isinstance(sti, dict) and 'index' in sti else -1
+                existing.add((ti.filepath, track_idx))
 
         for t in selected_tracks:
             key = (path, t['index'])
@@ -1428,6 +1433,39 @@ class HiFiPlayer(QMainWindow):
         return f"{m}:{s:02d}"
 
     # ─────────────────────────────────────────────
+    # Windows 타이틀바 다크 모드
+    # ─────────────────────────────────────────────
+    def _apply_dark_titlebar(self):
+        """Windows 10/11: DWM API로 타이틀바를 다크 테마에 맞게 설정"""
+        import sys
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            # Windows 11 (빌드 22000+): DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            # Windows 10 (빌드 18985+): DWMWA_USE_IMMERSIVE_DARK_MODE = 19 (undocumented)
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            value = ctypes.c_int(1)
+            result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(value),
+                ctypes.sizeof(value)
+            )
+            if result != 0:
+                # Windows 10 이전 버전 fallback (attribute 19)
+                DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY = 19
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY,
+                    ctypes.byref(value),
+                    ctypes.sizeof(value)
+                )
+        except Exception:
+            pass  # Windows 지원 안 되는 버전 또는 비-Windows 환경 무시
+
+    # ─────────────────────────────────────────────
     # 키보드 단축키
     # ─────────────────────────────────────────────
     def eventFilter(self, obj, event):
@@ -1459,6 +1497,11 @@ class HiFiPlayer(QMainWindow):
                 return True
             elif key == Qt.Key_M:
                 self.toggle_mini_player()
+                return True
+            elif key in (Qt.Key_Delete, Qt.Key_Backspace):
+                row = self.playlist.currentRow()
+                if row >= 0:
+                    self._remove_track(row)
                 return True
         return super().eventFilter(obj, event)
 

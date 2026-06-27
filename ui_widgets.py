@@ -1454,7 +1454,13 @@ class TrackItem:
         self.duration = 0.0
         self.format = Path(filepath).suffix.upper().lstrip('.')
         self.is_dsd = Path(filepath).suffix.lower() in ('.dsf', '.dff')
-        self._load_quick_meta()
+        self._sacd_track_info: Optional[dict] = None  # SACD ISO 트랙 정보 (None = 일반 파일)
+        # ISO 파일은 mutagen 파싱 불필요 (트랙 정보는 sacd_decoder에서 처리)
+        if filepath.lower().endswith('.iso'):
+            self.title = Path(filepath).stem
+            self.format = 'SACD'
+        else:
+            self._load_quick_meta()
 
     def _load_quick_meta(self):
         """빠른 메타데이터 로드 (재생 없이)"""
