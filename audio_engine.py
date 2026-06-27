@@ -385,6 +385,7 @@ class AudioEngine:
         self._device: Optional[miniaudio.PlaybackDevice] = None
         self._device_samplerate: int = 0
         self._device_channels: int = 0
+        self._resample_ratio: float = 1.0   # 실제 장치 SR / 요청 SR (1.0=정상, <1=다운샘플 필요)
 
         # 전환 중 플래그 — generator가 이 구간에서 무조건 무음 출력
         self._gen_stop = threading.Event()  # 현재 generator 중단 신호
@@ -1210,7 +1211,16 @@ class AudioEngine:
                         thread_prio=miniaudio.ThreadPriority.HIGHEST,
                     )
 
-                print(f'[Device] 열림({mode}) — SR={out_sr} ch={out_channels} dev_id={dev_id}')
+                # sounddevice는 SR fallback이 발생할 수 있음 → 실제 SR 확인 후 리샘플링 적용
+                actual_sr = getattr(self._device, 'actual_samplerate', out_sr)
+                if actual_sr != out_sr:
+                    print(f'[Device] SR fallback 감지: {out_sr} → {actual_sr}, 리샘플링 활성화')
+                    self._resample_ratio = actual_sr / out_sr  # <1 이면 다운샘플
+                    self._device_samplerate = actual_sr
+                else:
+                    self._resample_ratio = 1.0
+
+                print(f'[Device] 열림({mode}) — SR={actual_sr} ch={out_channels} dev_id={dev_id}')
                 self._start_permanent_generator()
                 last_error = None
                 break  # 성공
@@ -1409,7 +1419,9 @@ class AudioEngine:
             if self._dither_enabled:
                 chunk = AudioEngine._apply_dither(chunk)
 
-            frames = yield np.clip(chunk, -1.0, 1.0).astype(np.float32)
+            out_chunk = np.clip(chunk, -1.0, 1.0).astype(np.float32)
+
+            frames = yield out_chunk
 
     def _restart_generator(self):
         """곡 전환/seek 시 호출 — generator 교체 없이 state만 변경"""
@@ -1724,6 +1736,19 @@ class _SounddevicePlayer:
             except Exception:
                 dev_idx = None
 
+        # SR fallback 리샘플링 준비
+        # 예: 음원 96kHz, 장치 48kHz → ratio=0.5 → generator에 frames*2 요청 후 절반으로 다운샘플
+        _resample_up = 1
+        _resample_down = 1
+        _need_resample = False
+        if hasattr(self, 'actual_samplerate') and self.actual_samplerate != self.sample_rate:
+            from fractions import Fraction
+            f = Fraction(self.actual_samplerate, self.sample_rate).limit_denominator(128)
+            _resample_up = f.numerator    # actual / requested 의 분자
+            _resample_down = f.denominator
+            _need_resample = (_resample_up != _resample_down)
+            print(f'[SD] 리샘플링 활성화: {self.sample_rate}→{self.actual_samplerate} ({_resample_up}/{_resample_down})')
+
         def _cb(outdata, frames, time_info, status):
             if status:
                 print(f'[SD] status={status}')
@@ -1732,7 +1757,14 @@ class _SounddevicePlayer:
                     outdata[:] = 0
                     return
                 try:
-                    chunk = self._generator.send(frames)
+                    if _need_resample:
+                        # 장치가 actual_sr로 열렸으므로 generator에는 원본 SR 기준 frames 요청
+                        # frames(actual_sr 기준) → src_frames(original_sr 기준)
+                        src_frames = max(1, int(frames * _resample_down / _resample_up))
+                        chunk = self._generator.send(src_frames)
+                    else:
+                        chunk = self._generator.send(frames)
+
                     if chunk is None or len(chunk) == 0:
                         outdata[:] = 0
                     else:
@@ -1742,6 +1774,15 @@ class _SounddevicePlayer:
                             arr = arr.reshape(-1, 1)
                             if self.nchannels > 1:
                                 arr = np.repeat(arr, self.nchannels, axis=1)
+
+                        # SR 리샘플링 (96k→48k 등)
+                        if _need_resample and len(arr) > 0:
+                            try:
+                                from scipy.signal import resample_poly
+                                arr = resample_poly(arr, _resample_up, _resample_down, axis=0).astype(np.float32)
+                            except Exception:
+                                pass  # 실패 시 원본 그대로
+
                         got = min(frames, arr.shape[0])
                         outdata[:got] = arr[:got]
                         if got < frames:
@@ -1791,6 +1832,9 @@ class _SounddevicePlayer:
                                 key=lambda x: abs(x - requested_sr) if x <= requested_sr else float('inf'))
                 if target_sr == float('inf'):
                     target_sr = 48000
+
+        # SR fallback 발생 시 실제 열린 SR을 저장 → 엔진이 리샘플링에 활용
+        self.actual_samplerate = target_sr
 
         self._stream = sd.OutputStream(
             samplerate=target_sr,
