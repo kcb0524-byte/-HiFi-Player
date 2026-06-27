@@ -1436,34 +1436,49 @@ class HiFiPlayer(QMainWindow):
     # Windows 타이틀바 다크 모드
     # ─────────────────────────────────────────────
     def _apply_dark_titlebar(self):
-        """Windows 10/11: DWM API로 타이틀바를 다크 테마에 맞게 설정"""
+        """Windows 10/11: DWM API로 타이틀바 다크 모드 + 아이콘 제거"""
         import sys
         if sys.platform != 'win32':
             return
         try:
             import ctypes
+            import ctypes.wintypes
+
             hwnd = int(self.winId())
-            # Windows 11 (빌드 22000+): DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-            # Windows 10 (빌드 18985+): DWMWA_USE_IMMERSIVE_DARK_MODE = 19 (undocumented)
+
+            # ── 1. 다크 타이틀바 ──────────────────────────────────
             DWMWA_USE_IMMERSIVE_DARK_MODE = 20
             value = ctypes.c_int(1)
             result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_USE_IMMERSIVE_DARK_MODE,
-                ctypes.byref(value),
-                ctypes.sizeof(value)
+                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(value), ctypes.sizeof(value)
             )
             if result != 0:
-                # Windows 10 이전 버전 fallback (attribute 19)
-                DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY = 19
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY,
-                    ctypes.byref(value),
-                    ctypes.sizeof(value)
+                    hwnd, 19, ctypes.byref(value), ctypes.sizeof(value)
                 )
+
+            # ── 2. 타이틀바 아이콘 제거 ───────────────────────────
+            # WinAPI: WM_SETICON으로 빈 아이콘 설정
+            WM_SETICON   = 0x0080
+            ICON_SMALL   = 0
+            ICON_BIG     = 1
+            GWL_STYLE    = -16
+            WS_SYSMENU   = 0x00080000
+            # 현재 스타일 읽기 후 SYSMENU 제거 → 아이콘+시스템 메뉴 숨김
+            # (최소화/최대화/닫기 버튼은 유지됨)
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            # WS_SYSMENU 제거 시 닫기 버튼도 사라지므로 아이콘만 빈 값으로 대체
+            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, 0)
+            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, 0)
+
+            # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
+            # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
+            # 대신 타이틀 텍스트를 심플하게 변경
+            self.setWindowTitle("니콘 친게 HiFi Player")
+
         except Exception:
-            pass  # Windows 지원 안 되는 버전 또는 비-Windows 환경 무시
+            pass
 
     # ─────────────────────────────────────────────
     # 키보드 단축키

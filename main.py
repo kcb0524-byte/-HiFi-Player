@@ -15,6 +15,7 @@ DSF/DFF(DSD), FLAC, WAV, AIFF, MP3 등 광범위한 포맷 지원
 import sys
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon, QFont
 
 from player_window import HiFiPlayer
 
@@ -29,7 +30,17 @@ def main():
     app.setApplicationVersion("1.0")
     app.setOrganizationName("HiFiPlayer")
 
+    # 타이틀바 폰트: Windows는 Segoe UI, macOS는 SF Pro(시스템 기본)
+    if sys.platform == 'win32':
+        font = QFont("Segoe UI", 9)
+        font.setWeight(QFont.Light)
+        app.setFont(font)
+
     window = HiFiPlayer()
+
+    # 타이틀바 아이콘 제거 (빈 아이콘으로 대체)
+    window.setWindowIcon(QIcon())
+
     window.show()
     sys.exit(app.exec_())
 

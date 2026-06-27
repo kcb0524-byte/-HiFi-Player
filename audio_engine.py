@@ -758,11 +758,11 @@ class AudioEngine:
             stop_event=self._decode_stop,
             stopped_event=self._decode_stopped)
 
-        first_chunk_event.wait(timeout=10)
+        first_chunk_event.wait(timeout=15)  # 타임아웃 15초로 연장 (느린 HDD 대비)
         if error_box[0]:
-            raise RuntimeError(error_box[0])
+            raise RuntimeError(f"DSD 디코딩 오류: {error_box[0]}")
         if info_box[0] is None:
-            raise RuntimeError("DSD 로드 실패")
+            raise RuntimeError("DSD 로드 실패 (파일이 손상되었거나 지원하지 않는 형식일 수 있습니다)")
 
         info = info_box[0]
 
@@ -1372,18 +1372,15 @@ class AudioEngine:
                     pass
 
             # ── DoP 모드: DSD 비트를 PCM 프레임으로 패킹 ──
+            # DoP는 24bit DSD 데이터를 PCM 형태로 전송하는 프로토콜.
+            # 볼륨/RG를 곱하면 DSD 비트 패턴이 파괴되어 DAC가 인식 못하고 심각한 왜곡 발생.
+            # → 볼륨 처리 없이 그대로 전달 (비트퍼펙트와 동일)
             if self._dop_mode and self._is_dsd:
                 dop_out = _pack_dop(chunk, self._dop_marker_toggle)
                 if len(dop_out) < n:
                     pad = np.zeros((n - len(dop_out), out_ch), dtype=np.float32)
                     dop_out = np.concatenate([dop_out, pad], axis=0)
-                # DoP: 비트퍼펙트가 아닐 때 볼륨/RG 적용
-                if not self._bit_perfect:
-                    _vol = self._volume * (self._rg_gain if self._rg_enabled else 1.0)
-                    dop_out = np.clip(dop_out[:n] * _vol, -1.0, 1.0).astype(np.float32)
-                else:
-                    dop_out = dop_out[:n].astype(np.float32)
-                frames = yield dop_out
+                frames = yield dop_out[:n].astype(np.float32)
                 continue
 
             # ── 비트퍼펙트 모드: 모든 처리 bypass, 원본 그대로 ──

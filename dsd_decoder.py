@@ -92,6 +92,11 @@ class DSDDecoder:
         original_chunk_cb = chunk_cb
 
         def intercepting_chunk_cb(pcm, sr, info):
+            # info가 있는 첫 번째 청크는 즉시 전달 (first_chunk_event 해제용)
+            # 그래야 audio_engine의 first_chunk_event.wait()이 풀림
+            if info is not None and not chunk_buf:
+                original_chunk_cb(pcm, sr, info)
+                return
             chunk_buf.append((pcm, sr, info))
             # 버퍼에 11개 이상 쌓이면 앞것부터 확정 전달
             if len(chunk_buf) > 10:
