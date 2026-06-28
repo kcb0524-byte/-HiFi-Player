@@ -483,13 +483,17 @@ class AudioEngine:
 
     def set_output_device(self, device_index, device_name: str = ''):
         """출력 장치 변경 — 장치를 바꿔야 하므로 재시작 불가피"""
+        self._device_index = device_index
+        self._selected_device_name = device_name  # CoreAudio ID 매핑에 사용
+        # sample_rate가 0이면 파일이 로드되지 않은 초기 상태 → 장치만 저장하고 열기는 나중에
+        if self._sample_rate == 0:
+            self._close_device()
+            return
         was_state = self._state
         self._state = 'idle'
         self._gen_stop.set()
         self._close_device()
         time.sleep(0.05)
-        self._device_index = device_index
-        self._selected_device_name = device_name  # CoreAudio ID 매핑에 사용
         self._open_device()
         if was_state == 'playing':
             self._restart_generator()
@@ -1722,6 +1726,7 @@ class _SounddevicePlayer:
         """callback_generator: AudioEngine._permanent_generator() 와 같은 제너레이터"""
         import numpy as np
         import sounddevice as sd
+        from fractions import Fraction
 
         self._generator = callback_generator
         blocksize = int(self.sample_rate * 0.05)   # 50 ms
@@ -1736,19 +1741,57 @@ class _SounddevicePlayer:
             except Exception:
                 dev_idx = None
 
-        # SR fallback 리샘플링 준비
-        # 예: 음원 96kHz, 장치 48kHz → ratio=0.5 → generator에 frames*2 요청 후 절반으로 다운샘플
+        # ── 1단계: SR 협상 (callback 정의 전에 먼저 실행) ──────────────────
+        # 장치가 지원하는 샘플레이트를 순서대로 탐색 (요청 SR부터 내림차순 fallback)
+        requested_sr = self.sample_rate
+        all_standard_srs = [384000, 352800, 192000, 176400, 96000, 88200, 48000, 44100]
+
+        def _try_sr(sr, dev):
+            try:
+                sd.check_output_settings(
+                    device=dev, channels=self.nchannels,
+                    dtype='float32', samplerate=float(sr)
+                )
+                return True
+            except Exception:
+                return False
+
+        target_sr = requested_sr
+        if dev_idx is not None and not _try_sr(target_sr, dev_idx):
+            fallback_srs = [s for s in all_standard_srs if s <= requested_sr and s != requested_sr]
+            fallback_srs += [s for s in all_standard_srs if s > requested_sr]
+            target_sr = None
+            for sr in fallback_srs:
+                if _try_sr(sr, dev_idx):
+                    target_sr = sr
+                    print(f'[SD] SR {requested_sr} 미지원 → {sr} 으로 fallback')
+                    break
+            if target_sr is None:
+                target_sr = 48000
+                print(f'[SD] 모든 SR 실패 → 48000으로 최종 fallback')
+        elif dev_idx is None:
+            if requested_sr not in all_standard_srs:
+                target_sr = min(all_standard_srs,
+                                key=lambda x: abs(x - requested_sr) if x <= requested_sr else float('inf'))
+                if target_sr == float('inf'):
+                    target_sr = 48000
+
+        # SR fallback 결과 저장
+        self.actual_samplerate = target_sr
+
+        # ── 2단계: SR fallback 리샘플링 파라미터 계산 ──────────────────────
+        # 반드시 SR 협상 후에 계산해야 실제 fallback 값이 반영됨
         _resample_up = 1
         _resample_down = 1
         _need_resample = False
-        if hasattr(self, 'actual_samplerate') and self.actual_samplerate != self.sample_rate:
-            from fractions import Fraction
-            f = Fraction(self.actual_samplerate, self.sample_rate).limit_denominator(128)
-            _resample_up = f.numerator    # actual / requested 의 분자
+        if target_sr != requested_sr:
+            f = Fraction(target_sr, requested_sr).limit_denominator(128)
+            _resample_up = f.numerator    # target_sr / requested_sr 분자
             _resample_down = f.denominator
             _need_resample = (_resample_up != _resample_down)
-            print(f'[SD] 리샘플링 활성화: {self.sample_rate}→{self.actual_samplerate} ({_resample_up}/{_resample_down})')
+            print(f'[SD] 리샘플링 활성화: {requested_sr}Hz → {target_sr}Hz ({_resample_up}/{_resample_down})')
 
+        # ── 3단계: callback 정의 (리샘플링 파라미터 확정 후) ───────────────
         def _cb(outdata, frames, time_info, status):
             if status:
                 print(f'[SD] status={status}')
@@ -1758,8 +1801,8 @@ class _SounddevicePlayer:
                     return
                 try:
                     if _need_resample:
-                        # 장치가 actual_sr로 열렸으므로 generator에는 원본 SR 기준 frames 요청
-                        # frames(actual_sr 기준) → src_frames(original_sr 기준)
+                        # 장치가 target_sr로 열렸으므로 generator에는 원본 SR 기준 frames 요청
+                        # frames(target_sr 기준) → src_frames(requested_sr 기준)
                         src_frames = max(1, int(frames * _resample_down / _resample_up))
                         chunk = self._generator.send(src_frames)
                     else:
@@ -1780,8 +1823,8 @@ class _SounddevicePlayer:
                             try:
                                 from scipy.signal import resample_poly
                                 arr = resample_poly(arr, _resample_up, _resample_down, axis=0).astype(np.float32)
-                            except Exception:
-                                pass  # 실패 시 원본 그대로
+                            except Exception as re:
+                                print(f'[SD] resample_poly 오류: {re}')
 
                         got = min(frames, arr.shape[0])
                         outdata[:got] = arr[:got]
@@ -1793,49 +1836,7 @@ class _SounddevicePlayer:
                     print(f'[SD] callback 오류: {e}')
                     outdata[:] = 0
 
-        # 장치가 지원하는 샘플레이트를 순서대로 탐색 (요청 SR부터 내림차순 fallback)
-        requested_sr = self.sample_rate
-        # 표준 SR 목록 (높은 것부터)
-        all_standard_srs = [384000, 352800, 192000, 176400, 96000, 88200, 48000, 44100]
-
-        def _try_sr(sr, dev):
-            """해당 SR이 장치에서 사용 가능한지 확인"""
-            try:
-                sd.check_output_settings(
-                    device=dev, channels=self.nchannels,
-                    dtype='float32', samplerate=float(sr)
-                )
-                return True
-            except Exception:
-                return False
-
-        # 1단계: 요청 SR 그대로 시도
-        target_sr = requested_sr
-        if dev_idx is not None and not _try_sr(target_sr, dev_idx):
-            # 2단계: 요청 SR 이하의 표준 SR을 높은 것부터 시도
-            fallback_srs = [s for s in all_standard_srs if s <= requested_sr and s != requested_sr]
-            # 요청 SR보다 높은 표준 SR도 시도 (192000 요청 시 장치가 192000 대신 96000만 지원하는 경우)
-            fallback_srs += [s for s in all_standard_srs if s > requested_sr]
-            target_sr = None
-            for sr in fallback_srs:
-                if _try_sr(sr, dev_idx):
-                    target_sr = sr
-                    print(f'[SD] SR {requested_sr} 미지원 → {sr} 으로 fallback')
-                    break
-            if target_sr is None:
-                target_sr = 48000
-                print(f'[SD] 모든 SR 실패 → 48000으로 최종 fallback')
-        elif dev_idx is None:
-            # 장치 미지정 시 표준 SR 목록에서 가장 가까운 값 사용
-            if requested_sr not in all_standard_srs:
-                target_sr = min(all_standard_srs,
-                                key=lambda x: abs(x - requested_sr) if x <= requested_sr else float('inf'))
-                if target_sr == float('inf'):
-                    target_sr = 48000
-
-        # SR fallback 발생 시 실제 열린 SR을 저장 → 엔진이 리샘플링에 활용
-        self.actual_samplerate = target_sr
-
+        # ── 4단계: OutputStream 생성 및 시작 ───────────────────────────────
         self._stream = sd.OutputStream(
             samplerate=target_sr,
             channels=self.nchannels,
