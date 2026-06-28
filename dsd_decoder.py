@@ -185,6 +185,7 @@ class DSDDecoder:
                 'duration':        duration,
                 'format':          'DSF',
                 'dsd_rate':        _dsd_rate_string(sample_rate),
+                'source':          'DSF',
             }
 
             bytes_per_block = block_size * channel_count
@@ -320,6 +321,7 @@ class DSDDecoder:
                 'duration':        duration,
                 'format':          'DFF',
                 'dsd_rate':        _dsd_rate_string(sample_rate),
+                'source':          'DFF',
                 **metadata,
             }
 

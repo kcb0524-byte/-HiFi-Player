@@ -1353,33 +1353,53 @@ class HiFiPlayer(QMainWindow):
         self.lbl_detail.setStyleSheet(
             f"color:{DARK['text_muted']}; font-size:11px; font-family:monospace;")
 
+        # DSD 실제 샘플레이트 (2.8224MHz 등) vs PCM 변환 SR (44,100Hz)
+        dsd_sr = info.get('dsd_sample_rate', 0)  # 원본 DSD SR (DSF/DFF/SACD)
+        source = info.get('source', '')           # 'SACD ISO' 등
+
         # 숨긴 더미 레이블도 값 유지 (혹시 다른 곳에서 참조 시)
-        self.lbl_samplerate.setText(f"{sr:,} Hz" if sr else "--")
+        if dsd_sr:
+            self.lbl_samplerate.setText(f"{dsd_sr/1e6:.4f} MHz")
+        else:
+            self.lbl_samplerate.setText(f"{sr:,} Hz" if sr else "--")
         self.lbl_bitdepth.setText(str(bit) if bit else "--")
         self.lbl_channels.setText(ch_str)
 
         # bit_depth 정규화: "Signed 24 bit PCM" → "24-bit" 등
         import re as _re
         bit_str = ""
-        if bit:
+        if bit and not dsd_sr:   # DSD는 1-bit이라 별도 표시 불필요
             m = _re.search(r'(\d+)\s*bit', str(bit), _re.IGNORECASE)
             bit_str = f"{m.group(1)}-bit" if m else str(bit)
 
-        # 상세 스펙 한 줄 — 샘플레이트 · 비트뎁스 · 채널 · 재생시간 · 파일크기 · 비트레이트
+        # 상세 스펙 한 줄
+        # DSD: "2.8224 MHz · 1 · Stereo · 4:27 · 1886.6 MB · 5,644 kbps | SACD ISO"
+        # PCM: "96,000 Hz · 24-bit · Stereo · 4:27 · 120.3 MB · 4,608 kbps"
         parts = []
-        if sr:      parts.append(f"{sr:,} Hz")
-        if bit_str: parts.append(bit_str)
-        if ch:  parts.append(ch_str)
-        if dur: parts.append(self._fmt_time(dur))
+        if dsd_sr:
+            parts.append(f"{dsd_sr/1e6:.4f} MHz")
+        elif sr:
+            parts.append(f"{sr:,} Hz")
+        if bit_str:  parts.append(bit_str)
+        if ch:       parts.append(ch_str)
+        if dur:      parts.append(self._fmt_time(dur))
         filepath = info.get('filepath', '')
         if filepath and os.path.exists(filepath):
             size_bytes = os.path.getsize(filepath)
             size_mb = size_bytes / 1024 / 1024
             parts.append(f"{size_mb:.1f} MB")
             if dur and dur > 0:
-                kbps = (size_bytes * 8) / dur / 1000
-                parts.append(f"{kbps:.0f} kbps")
-        self.lbl_detail.setText("  ·  ".join(parts))
+                # DSD 비트레이트: dsd_sr × channels × 1bit
+                if dsd_sr and ch:
+                    kbps_dsd = (dsd_sr * ch) / 1000
+                    parts.append(f"{kbps_dsd:,.0f} kbps")
+                else:
+                    kbps = (size_bytes * 8) / dur / 1000
+                    parts.append(f"{kbps:.0f} kbps")
+        detail_str = "  ·  ".join(parts)
+        if source:
+            detail_str += f"  |  {source}"
+        self.lbl_detail.setText(detail_str)
 
         # ReplayGain 정보 표시
         rg_src = info.get('rg_source', '')

@@ -618,15 +618,31 @@ class SACDDecoder:
                         remaining -= sectors_to_read
                         continue
 
+                    # PCM 유효성 검사 — inf/nan 또는 극단값(garbage)이면 무음으로 교체
+                    if not np.isfinite(pcm).all() or np.abs(pcm).max() > 2.0:
+                        pcm = np.zeros_like(pcm)
+
                     info = {}
                     if first:
+                        dsd_fs = track_info.get('dsd_fs', DSD64_FS)
+                        dsd_rate_map = {
+                            2822400:  'DSD64 (2.8MHz)',
+                            5644800:  'DSD128 (5.6MHz)',
+                            11289600: 'DSD256 (11.2MHz)',
+                            22579200: 'DSD512 (22.5MHz)',
+                        }
+                        dsd_rate_str = dsd_rate_map.get(dsd_fs, f'DSD ({dsd_fs/1e6:.1f}MHz)')
+                        dsd_level    = dsd_fs // 44100  # 64, 128, 256 ...
                         info = {
-                            'sample_rate': pcm_fs,
-                            'channels':    channels,
-                            'format':      f"DSD{decimation*44100//44100}",
-                            'bit_depth':   1,
-                            'title':       track_info.get('title', ''),
-                            'album':       track_info.get('album', ''),
+                            'sample_rate':     pcm_fs,
+                            'dsd_sample_rate': dsd_fs,
+                            'dsd_rate':        dsd_rate_str,
+                            'channels':        channels,
+                            'format':          f'DSD{dsd_level}',
+                            'bit_depth':       1,
+                            'title':           track_info.get('title', ''),
+                            'album':           track_info.get('album', ''),
+                            'source':          'SACD ISO',
                         }
                         first = False
 

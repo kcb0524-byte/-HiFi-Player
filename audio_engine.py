@@ -555,6 +555,9 @@ class AudioEngine:
         self._position = 0
         self._dsd_position = 0
 
+        # filepath를 info에 항상 포함 (UI에서 파일 크기 등 계산에 사용)
+        info['filepath'] = filepath
+
         with self._lock:
             self._transitioning = False
             self._fade_out_frames = 0
