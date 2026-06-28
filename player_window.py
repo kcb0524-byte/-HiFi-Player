@@ -448,6 +448,11 @@ class HiFiPlayer(QMainWindow):
         self.toggle_dither = ToggleSwitch(checked=True)
         self.toggle_dither.toggled.connect(lambda on: self.engine.set_dither_enabled(on))
         lay.addLayout(_opt_row("TPDF Dithering", "Bit depth noise shaping", self.toggle_dither))
+        lay.addSpacing(4)
+
+        self.toggle_dop = ToggleSwitch(checked=False)
+        self.toggle_dop.toggled.connect(self._on_dop_toggled)
+        lay.addLayout(_opt_row("DoP Mode", "DSD over PCM (DAC 지원 필요)", self.toggle_dop))
         lay.addSpacing(6)
 
         sr_row = QHBoxLayout()
@@ -1553,6 +1558,32 @@ class HiFiPlayer(QMainWindow):
     def _on_rg_toggled(self, on: bool):
         self.engine.set_rg_enabled(on)
 
+    def _on_dop_toggled(self, on: bool):
+        """DoP (DSD over PCM) 모드 전환"""
+        self.engine.set_dop_mode(on)
+        if on:
+            from PyQt5.QtWidgets import QMessageBox
+            msg = QMessageBox(self)
+            msg.setWindowTitle("DoP 모드 활성화")
+            msg.setText(
+                "DoP 모드가 활성화되었습니다.\n\n"
+                "⚠️  DAC가 DoP를 지원해야 정상 재생됩니다.\n"
+                "지원하지 않는 DAC에서는 심한 소음이 발생합니다.\n\n"
+                "DoP 지원 DAC 예: iFi, Chord, Schiit, Topping D90SE 등\n"
+                "Scarlett 오디오 인터페이스는 DoP 미지원입니다."
+            )
+            msg.setIcon(QMessageBox.Warning)
+            msg.exec_()
+        # 현재 DSD 파일 재생 중이면 즉시 재로드하여 모드 전환 반영
+        if self.current_index >= 0:
+            track = self._track_at(self.current_index)
+            if track and hasattr(track, 'is_dsd') and track.is_dsd:
+                was_playing = (self.engine._state == 'playing')
+                pos = self.engine.current_position
+                self._start_track(self.current_index)
+                if was_playing:
+                    self.engine.seek(pos)
+
     def _on_bit_perfect_toggled(self, on: bool):
         self.engine.set_bit_perfect(on)
         # 비트퍼펙트 ON 시 EQ·RG·디더 컨트롤 비활성화 (시각적 피드백)
@@ -1633,6 +1664,7 @@ class HiFiPlayer(QMainWindow):
             bp_on      = data.get('bit_perfect', False)
             dither_on  = data.get('dither', True)
             ups_idx    = data.get('upsample_idx', 0)
+            dop_on     = data.get('dop_mode', False)
             self.toggle_rg.setChecked(rg_on)
             self.engine.set_rg_enabled(rg_on)
             self.toggle_bp.setChecked(bp_on)
@@ -1641,6 +1673,8 @@ class HiFiPlayer(QMainWindow):
             self.engine.set_dither_enabled(dither_on)
             self.combo_upsample.setCurrentIndex(ups_idx)
             self.engine.set_fixed_output_sr(self._UPSAMPLE_SR.get(ups_idx, 0))
+            self.toggle_dop.setChecked(dop_on)
+            self.engine.set_dop_mode(dop_on)
             if bp_on:
                 self.eq_panel.setEnabled(False)
                 self.toggle_rg.setEnabled(False)
@@ -1726,6 +1760,7 @@ class HiFiPlayer(QMainWindow):
                 'dither':         self.toggle_dither.isChecked(),
                 'upsample_idx':   self.combo_upsample.currentIndex(),
                 'rg_enabled':     self.toggle_rg.isChecked(),
+                'dop_mode':       self.toggle_dop.isChecked(),
                 # 출력 장치
                 'output_device_name': saved_device_name,
             }
