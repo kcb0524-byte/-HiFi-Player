@@ -34,40 +34,25 @@ DSD128_FS = 5644800   # DSD128
 # ─────────────────────────────────────────────────────────────
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from dsd_decoder import _get_fir, _bits_to_pcm
+from dsd_decoder import _get_fir, _bits_to_pcm, dsd_bytes_to_pcm_sacd, _choose_decimation
 
 
 def _dsd_bits_to_pcm(dsd_bytes: bytes, channels: int,
-                     decimation: int = 64) -> np.ndarray:
+                     decimation: int = 16,
+                     dsd_sr: int = DSD64_FS,
+                     zi_list: list = None):
     """
     SACD ISO DSD 데이터 → float32 PCM
+    새 버전: dsd_bytes_to_pcm_sacd() 위임 (Kaiser FIR, float64, zi 연속성)
 
-    SACD ISO는 big-endian 비트 순서 (MSB first), 채널 바이트 인터리브
-    (ch0_byte, ch1_byte, ch0_byte, ch1_byte, ...)
-
-    DFF는 bitorder='little'이지만 SACD ISO는 bitorder='big' (기본값)
+    Returns
+    -------
+    (pcm: float32, zi_list: list)
     """
-    fir  = _get_fir(decimation)
-    arr  = np.frombuffer(dsd_bytes, dtype=np.uint8)
-
-    total_bytes = len(arr)
-    usable = (total_bytes // channels) * channels
-    if usable == 0:
-        return np.zeros((0, channels), dtype=np.float32)
-
-    arr = arr[:usable]
-    pcm_channels = []
-    for ch in range(channels):
-        ch_bytes = arr[ch::channels]
-        # SACD ISO: big-endian 비트 순서 (bitorder 기본값 = 'big')
-        bits = np.unpackbits(ch_bytes).astype(np.float32)
-        pcm_ch = _bits_to_pcm(bits, decimation, fir)
-        pcm_channels.append(pcm_ch)
-
-    min_len = min(len(c) for c in pcm_channels)
-    if min_len == 0:
-        return np.zeros((0, channels), dtype=np.float32)
-    return np.column_stack([c[:min_len] for c in pcm_channels]).astype(np.float32)
+    pcm, zi_out, _ = dsd_bytes_to_pcm_sacd(
+        dsd_bytes, channels, decimation, dsd_sr, zi_list
+    )
+    return pcm, zi_out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -176,8 +161,8 @@ def _parse_area_toc(f, area_lsn: int) -> Optional[Dict]:
 
         # DSD 샘플레이트: 항상 DSD64(2822400) — SACD 표준
         dsd_fs     = DSD64_FS
-        decimation = 64
-        pcm_fs     = 44100
+        decimation = _choose_decimation(dsd_fs)   # DSD64 → 176400 Hz (÷16)
+        pcm_fs     = dsd_fs // decimation          # 176400 Hz
 
         # ── 트랙 테이블 파싱 ──────────────────────────────────
         # 실제 구조 (덤프 분석):
@@ -578,7 +563,8 @@ class SACDDecoder:
     # ─────────────────────────────────────────
     # 내부 스트리밍 워커
     # ─────────────────────────────────────────
-    CHUNK_SECTORS = 512   # 한 번에 읽을 섹터 수 (512 × 2048 = 1MB, FIR 워밍업 충분)
+    CHUNK_SECTORS      = 1024  # 일반 청크 (1024 × 2048 = 2MB, ~2.9초 분량)
+    CHUNK_SECTORS_FIRST = 64    # 첫 청크는 작게 (빠른 첫 소리)
 
     def _stream_worker(self, track_info: Dict,
                        chunk_cb, done_cb, error_cb,
@@ -590,14 +576,17 @@ class SACDDecoder:
         channels   = track_info['channels']
         decimation = track_info['decimation']
         pcm_fs     = track_info['pcm_fs']
+        dsd_fs     = track_info.get('dsd_fs', DSD64_FS)
         first      = True
+        zi_list    = [None] * channels   # 청크 간 FIR 위상 연속성
 
         try:
             with open(filepath, 'rb') as f:
                 remaining = size
                 cur_lsn   = lsn
                 while remaining > 0 and not stop_ev.is_set():
-                    sectors_to_read = min(self.CHUNK_SECTORS, remaining)
+                    chunk_sz = self.CHUNK_SECTORS_FIRST if first else self.CHUNK_SECTORS
+                    sectors_to_read = min(chunk_sz, remaining)
                     f.seek(cur_lsn * SACD_SECTOR_SIZE)
                     raw = f.read(sectors_to_read * SACD_SECTOR_SIZE)
                     if not raw:
@@ -612,7 +601,7 @@ class SACDDecoder:
                         dsd_data.extend(sec[SACD_HDR:])
                     raw = bytes(dsd_data)
 
-                    pcm = _dsd_bits_to_pcm(raw, channels, decimation)
+                    pcm, zi_list = _dsd_bits_to_pcm(raw, channels, decimation, dsd_fs, zi_list)
                     if len(pcm) == 0:
                         cur_lsn   += sectors_to_read
                         remaining -= sectors_to_read
@@ -624,7 +613,6 @@ class SACDDecoder:
 
                     info = {}
                     if first:
-                        dsd_fs = track_info.get('dsd_fs', DSD64_FS)
                         dsd_rate_map = {
                             2822400:  'DSD64 (2.8MHz)',
                             5644800:  'DSD128 (5.6MHz)',

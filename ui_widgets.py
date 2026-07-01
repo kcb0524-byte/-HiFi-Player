@@ -48,6 +48,7 @@ from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET
 class TrackLoader(QThread):
     loaded = pyqtSignal(dict)
     error = pyqtSignal(str)
+    progress = pyqtSignal(float)   # 0.0~1.0 — SACD ISO 로딩 진행률
 
     def __init__(self, engine: AudioEngine, filepath: str, sacd_track_info=None):
         super().__init__()
@@ -57,9 +58,16 @@ class TrackLoader(QThread):
 
     def run(self):
         try:
-            # SACD ISO: 엔진에 트랙 정보 미리 전달
+            # SACD ISO: 엔진에 트랙 정보와 progress 콜백 미리 전달
             if self.sacd_track_info is not None:
                 self.engine._sacd_track_info = self.sacd_track_info
+                # progress 콜백: 스레드에서 시그널로 emit (Qt 크로스스레드 안전)
+                def _prog(pct: float):
+                    try:
+                        self.progress.emit(float(pct))
+                    except Exception:
+                        pass
+                self.engine._sacd_progress_cb = _prog
             info = self.engine.load(self.filepath)
             info['filepath'] = self.filepath
             self.loaded.emit(info)
@@ -156,9 +164,7 @@ class MarqueeLabel(QWidget):
 # CD 회전 애니메이션 위젯
 # ─────────────────────────────────────────────────────────────
 class CDWidget(QWidget):
-    """재생 중 회전하는 CD 위젯 — 앨범아트 있으면 레이블 영역에 원형 표시."""
-
-    LABEL_TEXT = "ZUNAS"
+    """앨범아트 없을 때 표시하는 LP 레코드 위젯 — 회전 애니메이션 포함"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -166,7 +172,7 @@ class CDWidget(QWidget):
         self._angle = 0.0
         self._spinning = False
         self._timer = QTimer(self)
-        self._timer.setInterval(16)   # ~60fps — 부드러운 회전
+        self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
 
     def set_spinning(self, on: bool):
@@ -177,123 +183,110 @@ class CDWidget(QWidget):
             self._timer.stop()
 
     def _tick(self):
-        self._angle = (self._angle + 1.8) % 360.0
+        self._angle = (self._angle + 0.6) % 360.0
         self.update()
 
     def paintEvent(self, event):
         import math
-        from PyQt5.QtGui import (QRadialGradient, QConicalGradient,
-                                  QPen, QFontMetrics, QLinearGradient)
-
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
         w, h   = self.width(), self.height()
-        cx, cy = w / 2, h / 2
-        r       = min(cx, cy) - 2    # 외부 반경
-        hole_r  = r * 0.09           # 중앙 구멍
-        label_r = r * 0.52           # 레이블 영역 (앨범아트 표시 시 더 크게)
+        cx, cy = w / 2.0, h / 2.0
+        r      = min(cx, cy) - 1.5
 
-        # ════════════════════════════
-        # 1) CD 본체 — 회전 기준
-        # ════════════════════════════
         p.save()
         p.translate(cx, cy)
         p.rotate(self._angle)
 
-        # ── 베이스: 밝은 은색 원형 그라데이션 ──
-        base = QRadialGradient(r * 0.2, -r * 0.3, r * 1.4)
-        base.setColorAt(0.00, QColor(240, 240, 245))   # 하이라이트
-        base.setColorAt(0.25, QColor(200, 205, 215))
-        base.setColorAt(0.51, QColor(180, 185, 195))   # 레이블 경계
-        base.setColorAt(0.52, QColor(195, 200, 210))   # 데이터 영역
-        base.setColorAt(0.70, QColor(210, 215, 225))
-        base.setColorAt(0.87, QColor(185, 190, 205))
-        base.setColorAt(1.00, QColor(160, 165, 180))
-        p.setBrush(base)
+        # ── 1. LP 본체: 거의 검정 비닐 ──────────────────────────
+        vinyl = QRadialGradient(0, 0, r)
+        vinyl.setColorAt(0.00, QColor(38, 35, 42))
+        vinyl.setColorAt(0.30, QColor(28, 26, 32))
+        vinyl.setColorAt(0.60, QColor(22, 20, 26))
+        vinyl.setColorAt(1.00, QColor(15, 14, 18))
+        p.setBrush(vinyl)
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPoint(0, 0), int(r), int(r))
 
-        # ── 홀로그램 무지개 — 원뿔형 그라데이션 (회전과 함께) ──
-        cone = QConicalGradient(0, 0, 0)
-        cone.setColorAt(0.00, QColor(255, 80,  80,  70))
-        cone.setColorAt(0.12, QColor(255, 180, 0,   80))
-        cone.setColorAt(0.25, QColor(200, 255, 0,   70))
-        cone.setColorAt(0.37, QColor(0,   255, 150, 80))
-        cone.setColorAt(0.50, QColor(0,   180, 255, 70))
-        cone.setColorAt(0.62, QColor(80,  80,  255, 80))
-        cone.setColorAt(0.75, QColor(200, 0,   255, 70))
-        cone.setColorAt(0.87, QColor(255, 0,   150, 80))
-        cone.setColorAt(1.00, QColor(255, 80,  80,  70))
-        p.setBrush(cone)
-        p.drawEllipse(QPoint(0, 0), int(r), int(r))
-
-        # ── 트랙 동심원 ──
+        # ── 2. 그루브(홈) 동심원 ─────────────────────────────────
         p.setBrush(Qt.NoBrush)
-        track_count = 14
-        for i in range(track_count):
-            t   = (i + 1) / (track_count + 1)
-            rr  = int(label_r + (r - label_r) * t)
-            alpha = 30 + int(40 * abs(math.sin(math.radians(self._angle + i * 25))))
-            pen = QPen(QColor(255, 255, 255, alpha))
-            pen.setWidth(1)
+        groove_start = 0.30
+        groove_end   = 0.96
+        n_grooves    = 28
+        for i in range(n_grooves):
+            t   = groove_start + (groove_end - groove_start) * i / n_grooves
+            rr  = r * t
+            # 빛 반사 효과: 각도에 따라 밝기 변화
+            bright = 18 + int(14 * abs(math.sin(math.radians(i * 13 + self._angle * 0.3))))
+            pen = QPen(QColor(bright + 10, bright + 8, bright + 14, 180))
+            pen.setWidthF(0.7)
             p.setPen(pen)
-            p.drawEllipse(QPoint(0, 0), rr, rr)
+            p.drawEllipse(QPoint(0, 0), int(rr), int(rr))
 
-        # ── 바깥 테두리 ──
-        p.setPen(QPen(QColor(140, 145, 160), 1))
+        # ── 3. 광택 하이라이트 (회전과 함께) ────────────────────
+        shine = QConicalGradient(0, 0, self._angle * 0.7)
+        shine.setColorAt(0.00, QColor(255, 255, 255, 0))
+        shine.setColorAt(0.08, QColor(255, 255, 255, 22))
+        shine.setColorAt(0.15, QColor(255, 255, 255, 8))
+        shine.setColorAt(0.55, QColor(255, 255, 255, 0))
+        shine.setColorAt(0.58, QColor(180, 190, 255, 14))
+        shine.setColorAt(0.65, QColor(255, 255, 255, 0))
+        shine.setColorAt(1.00, QColor(255, 255, 255, 0))
+        p.setBrush(shine)
+        p.setPen(Qt.NoPen)
         p.drawEllipse(QPoint(0, 0), int(r), int(r))
 
-        # ── 레이블 원 (흰색 무광) ──
-        lr = int(label_r)
-        label_grad = QRadialGradient(-label_r * 0.1, -label_r * 0.2, label_r * 1.1)
-        label_grad.setColorAt(0.0, QColor(245, 243, 255))
-        label_grad.setColorAt(0.6, QColor(230, 228, 245))
-        label_grad.setColorAt(1.0, QColor(210, 208, 230))
+        # ── 4. 센터 레이블 (골드 톤 원형) ───────────────────────
+        lr = int(r * 0.28)
+        label_grad = QRadialGradient(-lr * 0.25, -lr * 0.3, lr * 1.3)
+        label_grad.setColorAt(0.00, QColor(210, 175,  80))
+        label_grad.setColorAt(0.40, QColor(185, 145,  55))
+        label_grad.setColorAt(0.75, QColor(160, 120,  35))
+        label_grad.setColorAt(1.00, QColor(130,  95,  20))
         p.setBrush(label_grad)
-        p.setPen(QPen(QColor(190, 188, 210), 1))
+        p.setPen(QPen(QColor(100, 75, 15), 1))
         p.drawEllipse(QPoint(0, 0), lr, lr)
 
-        # ── ZUNAS 원형 텍스트 (크기 비례) ──
-        font_size = max(12, int(label_r * 0.25))
-        font = QFont('Arial', font_size, QFont.Bold)
-        p.setFont(font)
-        fm = QFontMetrics(font)
-        text     = self.LABEL_TEXT
-        text_r   = label_r * 0.60
-        n        = len(text)
-        arc_step = 360.0 / n
-        p.setPen(QColor(60, 40, 110))
-        for i, ch in enumerate(text):
-            angle_deg = -90 + arc_step * i
-            angle_rad = math.radians(angle_deg)
-            gx = text_r * math.cos(angle_rad)
-            gy = text_r * math.sin(angle_rad)
-            cw = fm.horizontalAdvance(ch)
-            ch_h = fm.ascent()
-            p.save()
-            p.translate(gx, gy)
-            p.rotate(angle_deg + 90)
-            p.drawText(int(-cw / 2), int(ch_h / 2), ch)
-            p.restore()
+        # ── 5. 레이블 텍스트 — LP와 함께 회전 ──────────────────
+        # 상단: ZUNAS, 하단: Player  (구멍 위/아래로 충분히 분리)
+        fnt_top = QFont('Arial', max(5, int(lr * 0.30)), QFont.Bold)
+        fnt_sub = QFont('Arial', max(4, int(lr * 0.24)))
+        fm_top = QFontMetrics(fnt_top)
+        fm_sub = QFontMetrics(fnt_sub)
+        hole_r = int(r * 0.055)  # 구멍 반지름 (6번 단계와 동일 비율)
 
-        # ── 중앙 구멍 ──
-        p.setBrush(QColor(20, 20, 28))
-        p.setPen(QPen(QColor(120, 125, 140), 1))
-        p.drawEllipse(QPoint(0, 0), int(hole_r), int(hole_r))
+        # ZUNAS — 구멍 위쪽, 여유 있게
+        p.setFont(fnt_top)
+        p.setPen(QColor(45, 28, 5))
+        tw = fm_top.horizontalAdvance("ZUNAS")
+        # 텍스트 baseline이 구멍 상단에서 4px 위에 오도록
+        y_top = -(hole_r + 4 + fm_top.descent())
+        p.drawText(int(-tw / 2), y_top, "ZUNAS")
 
-        # ── 구멍 내부 반사 링 ──
+        # Player — 구멍 아래쪽, 여유 있게
+        p.setFont(fnt_sub)
+        p.setPen(QColor(70, 48, 12))
+        tw2 = fm_sub.horizontalAdvance("Player")
+        y_bot = hole_r + 4 + fm_sub.ascent()
+        p.drawText(int(-tw2 / 2), y_bot, "Player")
+
+        # ── 6. 중앙 스핀들 구멍 ─────────────────────────────────
+        hole_r = int(r * 0.055)
+        p.setBrush(QColor(8, 7, 10))
+        p.setPen(QPen(QColor(60, 55, 70), 1))
+        p.drawEllipse(QPoint(0, 0), hole_r, hole_r)
+
+        p.restore()  # translate + rotate 해제
+
+        # ── 7. 외곽 테두리 ───────────────────────────────────────
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(200, 210, 230, 120), 1))
-        p.drawEllipse(QPoint(0, 0), int(hole_r - 1), int(hole_r - 1))
+        p.setPen(QPen(QColor(50, 45, 58), 1))
+        p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
 
-        p.restore()   # translate(cx,cy) + rotate(_angle) 해제
-
-        # ════════════════════════════
-        # 2) 하이라이트 — 항상 같은 위치 (좌상단 빛)
-        # ════════════════════════════
-        hi = QRadialGradient(cx - r * 0.3, cy - r * 0.4, r * 0.55)
-        hi.setColorAt(0.0, QColor(255, 255, 255, 90))
+        # ── 8. 고정 하이라이트 (좌상단 빛) ──────────────────────
+        hi = QRadialGradient(cx - r * 0.35, cy - r * 0.38, r * 0.5)
+        hi.setColorAt(0.0, QColor(255, 255, 255, 45))
         hi.setColorAt(1.0, QColor(255, 255, 255, 0))
         p.setBrush(hi)
         p.setPen(Qt.NoPen)

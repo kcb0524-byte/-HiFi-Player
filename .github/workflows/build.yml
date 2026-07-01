@@ -32,7 +32,7 @@ jobs:
       - name: PyInstaller 빌드
         run: |
           pyinstaller `
-            --name "니콘 친게 HiFi Player" `
+            --name "Nikon Chinge HiFi Player" `
             --windowed `
             --icon icon.ico `
             --add-data "constants.py;." `
@@ -47,46 +47,90 @@ jobs:
             --hidden-import PyQt5.QtCore `
             --hidden-import PyQt5.QtGui `
             --hidden-import PyQt5.QtWidgets `
+            --hidden-import PyQt5.sip `
             --hidden-import scipy `
             --hidden-import scipy.signal `
+            --hidden-import scipy.signal._upfirdn `
+            --hidden-import scipy.signal._upfirdn_apply `
+            --hidden-import scipy.signal._sosfilt `
+            --hidden-import scipy.signal.windows `
+            --hidden-import scipy.fft `
+            --hidden-import scipy.fft._pocketfft `
+            --hidden-import scipy._lib `
+            --hidden-import scipy._lib.messagestream `
+            --hidden-import scipy.interpolate `
             --hidden-import sounddevice `
             --hidden-import mutagen `
             --hidden-import mutagen.flac `
             --hidden-import mutagen.mp3 `
             --hidden-import mutagen.mp4 `
             --hidden-import mutagen.id3 `
+            --hidden-import struct `
+            --hidden-import threading `
+            --hidden-import socket `
+            --hidden-import urllib.request `
+            --hidden-import xml.etree.ElementTree `
             --collect-all scipy `
             --collect-all sounddevice `
             --noconfirm `
             main.py
 
+      - name: scipy 테스트 파일 제거 (용량 최적화)
+        run: |
+          Get-ChildItem -Path "dist\Nikon Chinge HiFi Player\_internal" -Recurse -Directory -Filter "tests" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        shell: powershell
+
       - name: Inno Setup 설치
         run: choco install innosetup -y
 
+      - name: installer.iss 생성
+        run: |
+          @"
+          [Setup]
+          AppName=Nikon Chinge HiFi Player
+          AppVersion=1.0.0
+          AppPublisher=Nikon Chinge
+          DefaultDirName={autopf}\Nikon Chinge HiFi Player
+          DefaultGroupName=Nikon Chinge HiFi Player
+          OutputDir=dist
+          OutputBaseFilename=NikonChingeHiFiPlayer_Setup_1.0.0
+          SetupIconFile=icon.ico
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+
+          [Languages]
+          Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+
+          [Tasks]
+          Name: "desktopicon"; Description: "바탕화면에 바로가기 만들기"; GroupDescription: "추가 작업:"
+
+          [Files]
+          Source: "dist\Nikon Chinge HiFi Player\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\Nikon Chinge HiFi Player"; Filename: "{app}\Nikon Chinge HiFi Player.exe"
+          Name: "{group}\제거"; Filename: "{uninstallexe}"
+          Name: "{autodesktop}\Nikon Chinge HiFi Player"; Filename: "{app}\Nikon Chinge HiFi Player.exe"; Tasks: desktopicon
+
+          [Run]
+          Filename: "{app}\Nikon Chinge HiFi Player.exe"; Description: "Nikon Chinge HiFi Player 실행"; Flags: nowait postinstall skipifsilent
+          "@ | Out-File -FilePath installer_win.iss -Encoding utf8
+        shell: powershell
+
       - name: 설치 파일 생성 (Inno Setup)
-        run: iscc installer.iss
+        run: iscc installer_win.iss
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/니콘_친게_HiFi_Player_Setup_1.0.0.exe
+          path: dist/NikonChingeHiFiPlayer_Setup_1.0.0.exe
           retention-days: 30
 
-  # ── macOS 빌드 (공통 스텝을 matrix로 처리) ──────────────────
+  # ── macOS 빌드 (Apple Silicon) ─────────────────────────────────
   build-macos:
-    strategy:
-      matrix:
-        include:
-          - runs-on: macos-14    # Apple Silicon (M1/M2/M3)
-            arch: arm64
-            artifact: macos-dmg-arm64
-            dmg: 니콘_친게_HiFi_Player-1.0.0-arm64.dmg
-          - runs-on: macos-13    # Intel x86_64
-            arch: x86_64
-            artifact: macos-dmg-x86_64
-            dmg: 니콘_친게_HiFi_Player-1.0.0-x86_64.dmg
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -106,7 +150,7 @@ jobs:
       - name: PyInstaller 빌드
         run: |
           pyinstaller \
-            --name "니콘 친게 HiFi Player" \
+            --name "Nikon Chinge HiFi Player" \
             --windowed \
             --icon icon.icns \
             --osx-bundle-identifier com.twsemicon.hifi-player \
@@ -118,31 +162,59 @@ jobs:
             --add-data "sacd_decoder.py:." \
             --add-data "upnp_browser.py:." \
             --hidden-import PyQt5 \
+            --hidden-import PyQt5.QtCore \
+            --hidden-import PyQt5.QtGui \
+            --hidden-import PyQt5.QtWidgets \
+            --hidden-import PyQt5.sip \
             --hidden-import scipy \
             --hidden-import scipy.signal \
+            --hidden-import scipy.signal._upfirdn \
+            --hidden-import scipy.signal._upfirdn_apply \
+            --hidden-import scipy.signal._sosfilt \
+            --hidden-import scipy.signal.windows \
+            --hidden-import scipy.fft \
+            --hidden-import scipy.fft._pocketfft \
+            --hidden-import scipy._lib \
+            --hidden-import scipy._lib.messagestream \
+            --hidden-import scipy.interpolate \
             --hidden-import sounddevice \
             --hidden-import mutagen \
+            --hidden-import mutagen.flac \
+            --hidden-import mutagen.mp3 \
+            --hidden-import mutagen.mp4 \
+            --hidden-import mutagen.id3 \
             --collect-all scipy \
             --collect-all sounddevice \
             --noconfirm \
             main.py
 
-      - name: ffmpeg 번들 포함
-        run: cp $(which ffmpeg) "dist/니콘 친게 HiFi Player.app/Contents/MacOS/ffmpeg"
+      - name: scipy 테스트 파일 제거
+        run: |
+          find "dist/Nikon Chinge HiFi Player.app" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find "dist/Nikon Chinge HiFi Player.app" -name "*.pyx" -delete 2>/dev/null || true
+          find "dist/Nikon Chinge HiFi Player.app" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
-      - name: Ad-hoc 코드사이닝
-        run: codesign --force --deep --sign - "dist/니콘 친게 HiFi Player.app" || echo "codesign 실패 (무시)"
+      - name: ffmpeg 번들 포함
+        run: cp $(which ffmpeg) "dist/Nikon Chinge HiFi Player.app/Contents/MacOS/ffmpeg"
+
+      - name: entitlements 적용 및 Ad-hoc 코드사이닝
+        run: |
+          codesign --force --deep --sign - \
+            --entitlements entitlements.plist \
+            "dist/Nikon Chinge HiFi Player.app" || \
+          codesign --force --deep --sign - \
+            "dist/Nikon Chinge HiFi Player.app" || true
 
       - name: DMG 생성
         run: |
-          hdiutil create -volname "니콘 친게 HiFi Player" \
-            -srcfolder "dist/니콘 친게 HiFi Player.app" \
+          hdiutil create -volname "Nikon Chinge HiFi Player" \
+            -srcfolder "dist/Nikon Chinge HiFi Player.app" \
             -ov -format UDZO \
-            "dist/${{ matrix.dmg }}"
+            "dist/NikonChingeHiFiPlayer-1.0.0-arm64.dmg"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.dmg }}
+          name: macos-dmg-arm64
+          path: dist/NikonChingeHiFiPlayer-1.0.0-arm64.dmg
           retention-days: 30

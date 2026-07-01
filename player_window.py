@@ -65,6 +65,7 @@ class HiFiPlayer(QMainWindow):
         self.current_info: dict = {}
         self._loader: Optional[TrackLoader] = None
         self._seeking = False
+        self._is_sacd_playing = False
         self._last_finished_index: int = -1
         self._shuffle = False
         # repeat_mode: 0=없음, 1=한곡 반복, 2=전체(셔플 포함)
@@ -154,7 +155,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("니콘 친게 HiFi Music Player")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player")
         self.setMinimumSize(920, 900)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -254,7 +255,7 @@ class HiFiPlayer(QMainWindow):
 
         self.art_stack.setCurrentIndex(0)
         art_layout.addWidget(self.art_stack)
-        lay.addWidget(art_frame)
+        lay.addWidget(art_frame, 0, Qt.AlignHCenter)
         lay.addSpacing(8)
 
         # 곡정보 레이블은 우측 패널 플레이리스트 헤더로 이동
@@ -264,15 +265,23 @@ class HiFiPlayer(QMainWindow):
         self.lbl_album  = QLabel()
 
         # ── 포맷 뱃지 + 스펙 (완전 고정 높이 — 재생 전후 동일 크기 유지) ──
+        # ── 스펙 영역: 배지 + 두 줄 정보 ─────────────────────────
+        # 1행: [DSD64 배지]  2.8224 MHz · Stereo · 3:44 · 1782.9 MB · 5,645 kbps
+        # 2행: (DSD 시) Output: PCM 176,400 Hz · SACD ISO
+        #       (PCM 업샘플) 44,100 Hz → 88,200 Hz · 24-bit · Stereo ...
+        _BADGE_BASE = "font-size:11px; font-weight:bold; font-family:monospace; border-radius:3px; padding:1px 6px;"
+
         spec_container = QWidget()
-        spec_container.setFixedHeight(26)
-        spec_row = QHBoxLayout(spec_container)
+        spec_vlay = QVBoxLayout(spec_container)
+        spec_vlay.setContentsMargins(0, 0, 0, 0)
+        spec_vlay.setSpacing(2)
+
+        # 1행 (배지 + 주 스펙)
+        spec_row = QHBoxLayout()
         spec_row.setContentsMargins(0, 0, 0, 0)
         spec_row.setSpacing(8)
         spec_row.setAlignment(Qt.AlignCenter)
 
-        # font-size는 항상 11px 고정 — 재생 전후 크기 변화 없음
-        _BADGE_BASE = "font-size:11px; font-weight:bold; font-family:monospace; border-radius:3px; padding:1px 6px;"
         self.lbl_format = QLabel("—")
         self.lbl_format.setFixedHeight(20)
         self.lbl_format.setStyleSheet(
@@ -286,6 +295,17 @@ class HiFiPlayer(QMainWindow):
 
         spec_row.addWidget(self.lbl_format)
         spec_row.addWidget(self.lbl_detail)
+        spec_vlay.addLayout(spec_row)
+
+        # 2행 (출력 SR / 소스 — DSD 또는 업샘플 시에만 표시)
+        self.lbl_detail2 = QLabel("")
+        self.lbl_detail2.setFixedHeight(16)
+        self.lbl_detail2.setAlignment(Qt.AlignCenter)
+        self.lbl_detail2.setStyleSheet(
+            "color:transparent; font-size:10px; font-family:monospace;")
+        self.lbl_detail2.hide()
+        spec_vlay.addWidget(self.lbl_detail2)
+
         lay.addWidget(spec_container)
         lay.addSpacing(6)
 
@@ -701,7 +721,7 @@ class HiFiPlayer(QMainWindow):
         lay.addWidget(self.mini_btn_next)
 
         # ── 미니→메인 복귀 버튼 ────────────────────────────────
-        btn_expand = QPushButton("⤢")
+        btn_expand = QPushButton("↗")
         btn_expand.setFixedSize(28, 28)
         btn_expand.setToolTip("전체 화면으로 돌아가기")
         btn_expand.setStyleSheet(
@@ -1145,6 +1165,18 @@ class HiFiPlayer(QMainWindow):
         self.btn_play.set_icon("pause")
         self._highlight_current()
 
+        # SACD ISO: seek 미지원 → 슬라이더 비활성화 + 클릭 시 안내
+        is_sacd = info.get('source', '') == 'SACD ISO'
+        self._is_sacd_playing = is_sacd
+        self.seek_slider.setEnabled(not is_sacd)
+        self.seek_slider.setToolTip("" if not is_sacd else "SACD ISO는 탐색을 지원하지 않습니다")
+        if hasattr(self, 'mini_seek'):
+            self.mini_seek.setEnabled(not is_sacd)
+        # 이벤트 필터 등록 (중복 방지)
+        self.seek_slider.installEventFilter(self)
+        if hasattr(self, 'mini_seek'):
+            self.mini_seek.installEventFilter(self)
+
     def _toggle_play(self):
         if self._loader and self._loader.isRunning():
             return
@@ -1283,6 +1315,26 @@ class HiFiPlayer(QMainWindow):
         if self._is_mini and not self._seeking:
             self.mini_seek.setValue(self.seek_slider.value())
 
+    def eventFilter(self, obj, event):
+        """SACD ISO 재생 중 seek 슬라이더 클릭 시 안내 메시지 표시"""
+        from PyQt5.QtCore import QEvent
+        from PyQt5.QtWidgets import QToolTip
+        seek_widgets = [self.seek_slider]
+        if hasattr(self, 'mini_seek'):
+            seek_widgets.append(self.mini_seek)
+        if (obj in seek_widgets and
+                getattr(self, '_is_sacd_playing', False) and
+                event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick)):
+            QToolTip.showText(
+                obj.mapToGlobal(event.pos()),
+                "SACD ISO는 탐색(seek)을 지원하지 않습니다",
+                obj,
+                obj.rect(),
+                3000   # 3초간 표시
+            )
+            return True   # 이벤트 소비 (슬라이더 이동 차단)
+        return super().eventFilter(obj, event)
+
     def _on_seek_pressed(self):
         self._seeking = True
 
@@ -1292,6 +1344,7 @@ class HiFiPlayer(QMainWindow):
             pos = self.seek_slider.value() / 1000.0 * dur
             self.engine.seek(pos)
         self._seeking = False
+        self._is_sacd_playing = False
 
     def _on_mini_seek_released(self):
         dur = self.engine.duration
@@ -1300,6 +1353,7 @@ class HiFiPlayer(QMainWindow):
             self.engine.seek(pos)
             self.seek_slider.setValue(self.mini_seek.value())
         self._seeking = False
+        self._is_sacd_playing = False
 
     def _on_volume_changed(self, value: int):
         vol = value / 100.0
@@ -1380,9 +1434,13 @@ class HiFiPlayer(QMainWindow):
         # 상세 스펙 한 줄
         # DSD: "2.8224 MHz · 1 · Stereo · 4:27 · 1886.6 MB · 5,644 kbps | SACD ISO"
         # PCM: "96,000 Hz · 24-bit · Stereo · 4:27 · 120.3 MB · 4,608 kbps"
+        orig_sr = info.get('original_sample_rate', 0)  # 업샘플링 전 원본 SR
         parts = []
         if dsd_sr:
             parts.append(f"{dsd_sr/1e6:.4f} MHz")
+        elif orig_sr and orig_sr != sr:
+            # 업샘플링 적용: "44,100 Hz → 88,200 Hz" 형태
+            parts.append(f"{orig_sr:,} Hz → {sr:,} Hz")
         elif sr:
             parts.append(f"{sr:,} Hz")
         if bit_str:  parts.append(bit_str)
@@ -1402,9 +1460,24 @@ class HiFiPlayer(QMainWindow):
                     kbps = (size_bytes * 8) / dur / 1000
                     parts.append(f"{kbps:.0f} kbps")
         detail_str = "  ·  ".join(parts)
-        if source:
-            detail_str += f"  |  {source}"
         self.lbl_detail.setText(detail_str)
+
+        # 2행: DSD→PCM 출력 SR + 소스 표시
+        out_sr = info.get('sample_rate', 0)
+        second_parts = []
+        if dsd_sr and out_sr:
+            second_parts.append(f"Output: PCM {out_sr:,} Hz")
+        if source:
+            second_parts.append(source)
+        if second_parts:
+            second_str = "  ·  ".join(second_parts)
+            self.lbl_detail2.setText(second_str)
+            self.lbl_detail2.setStyleSheet(
+                f"color:{DARK['text_muted']}; font-size:10px; font-family:monospace;")
+            self.lbl_detail2.show()
+        else:
+            self.lbl_detail2.setText("")
+            self.lbl_detail2.hide()
 
         # ReplayGain 정보 표시
         rg_src = info.get('rg_source', '')
@@ -1500,7 +1573,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("니콘 친게 HiFi Player")
+            self.setWindowTitle("Nikon Chinge HiFi Player")
 
         except Exception:
             pass
@@ -1563,14 +1636,26 @@ class HiFiPlayer(QMainWindow):
         self.engine.set_dop_mode(on)
         if on:
             from PyQt5.QtWidgets import QMessageBox
+            # 현재 선택된 출력 장치 이름 가져오기
+            dev_name = getattr(self.engine, '_selected_device_name', '') or ""
+            if not dev_name:
+                try:
+                    dev_idx = getattr(self.engine, '_device_index', None)
+                    if dev_idx is not None:
+                        import sounddevice as _sd
+                        dev_info = _sd.query_devices(dev_idx)
+                        dev_name = dev_info.get('name', '')
+                except Exception:
+                    pass
+            dev_line = f"현재 출력 장치: {dev_name}\n이 장치가 DoP를 지원하지 않으면 심한 소음이 발생합니다." \
+                       if dev_name else "지원하지 않는 DAC에서는 심한 소음이 발생합니다."
             msg = QMessageBox(self)
             msg.setWindowTitle("DoP 모드 활성화")
             msg.setText(
                 "DoP 모드가 활성화되었습니다.\n\n"
-                "⚠️  DAC가 DoP를 지원해야 정상 재생됩니다.\n"
-                "지원하지 않는 DAC에서는 심한 소음이 발생합니다.\n\n"
-                "DoP 지원 DAC 예: iFi, Chord, Schiit, Topping D90SE 등\n"
-                "Scarlett 오디오 인터페이스는 DoP 미지원입니다."
+                f"⚠️  DAC가 DoP를 지원해야 정상 재생됩니다.\n"
+                f"{dev_line}\n\n"
+                "DoP 지원 DAC 예: iFi, Chord, Schiit, Topping D90SE 등"
             )
             msg.setIcon(QMessageBox.Warning)
             msg.exec_()
@@ -1610,6 +1695,22 @@ class HiFiPlayer(QMainWindow):
 
     def _on_upsample_changed(self, idx: int):
         sr = self._UPSAMPLE_SR.get(idx, 0)
+        # 다운샘플링 차단: 현재 파일 SR보다 낮은 타겟 SR 선택 시 경고
+        if sr > 0 and self.current_index >= 0:
+            cur_sr = getattr(self.engine, '_sample_rate', 0)
+            if cur_sr > 0 and sr < cur_sr:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self, "다운샘플링 불가",
+                    f"현재 파일의 샘플레이트({cur_sr:,} Hz)보다\n"
+                    f"낮은 값({sr:,} Hz)으로는 변환할 수 없습니다.\n\n"
+                    f"원본 SR({cur_sr:,} Hz) 이상의 값을 선택하세요."
+                )
+                # 콤보박스를 '원본' (idx=0)으로 복원
+                self.combo_upsample.blockSignals(True)
+                self.combo_upsample.setCurrentIndex(0)
+                self.combo_upsample.blockSignals(False)
+                return
         self.engine.set_fixed_output_sr(sr)
         # 현재 로드된 파일이 있으면 재로드 필요 (업샘플링은 로드 시 적용)
         if sr > 0 and self.current_index >= 0:
@@ -1785,7 +1886,7 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("니콘 친게 HiFi Music Player")
+    app.setApplicationName("Nikon Chinge HiFi Music Player")
     app.setApplicationVersion("1.0")
     app.setOrganizationName("HiFiPlayer")
 

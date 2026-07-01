@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
-#  니콘 친게 HiFi Music Player — macOS Apple Silicon 빌드 스크립트
-#  결과물: dist/니콘 친게 HiFi Player-1.0.0.dmg
+#  Nikon Chinge HiFi Music Player — macOS Apple Silicon 빌드 스크립트
+#  결과물: dist/Nikon Chinge HiFi Player-1.0.0.dmg
 #
 #  사전 요구사항:
 #    pip install pyinstaller scipy mutagen sounddevice numpy PyQt5
@@ -14,7 +14,7 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
-APP_NAME="니콘 친게 HiFi Player"
+APP_NAME="Nikon Chinge HiFi Player"
 BUNDLE_ID="com.twsemicon.hifi-player"
 VERSION="1.0.0"
 ICON="icon.icns"
@@ -79,6 +79,7 @@ ${PYINSTALLER} \
   --add-data      "dsd_decoder.py:." \
   --add-data      "sacd_decoder.py:." \
   --add-data      "upnp_browser.py:." \
+  $([ -f "libdst_wrapper.dylib" ] && echo "--add-binary libdst_wrapper.dylib:.") \
   \
   --hidden-import sounddevice \
   --hidden-import sounddevice._sounddevice \
@@ -86,9 +87,19 @@ ${PYINSTALLER} \
   --hidden-import scipy.signal \
   --hidden-import scipy.signal._upfirdn \
   --hidden-import scipy.signal._upfirdn_apply \
+  --hidden-import scipy.signal._sosfilt \
+  --hidden-import scipy.signal.windows \
+  --hidden-import scipy.signal.windows._windows \
   --hidden-import scipy.fft \
+  --hidden-import scipy.fft._pocketfft \
+  --hidden-import scipy.fft._pocketfft.helper \
   --hidden-import scipy._lib \
   --hidden-import scipy._lib.messagestream \
+  --hidden-import scipy._lib._ccallback \
+  --hidden-import scipy.interpolate \
+  --hidden-import scipy.interpolate._interpolate \
+  --collect-all   scipy \
+  --collect-all   sounddevice \
   --hidden-import numpy \
   --hidden-import numpy.core \
   --hidden-import numpy.core._multiarray_umath \
@@ -111,8 +122,6 @@ ${PYINSTALLER} \
   --hidden-import urllib.request \
   --hidden-import xml.etree.ElementTree \
   \
-  --collect-all   scipy \
-  --collect-all   sounddevice \
   \
   --noconfirm \
   main.py
@@ -155,20 +164,44 @@ set_plist CFBundleShortVersionString "$VERSION" string
 set_plist CFBundleVersion "$VERSION" string
 set_plist NSHighResolutionCapable true bool
 set_plist LSMinimumSystemVersion "12.0" string
-# 마이크/오디오 권한 설명 (macOS 요구)
-set_plist NSMicrophoneUsageDescription "오디오 출력에 사용됩니다" string
+# NSMicrophoneUsageDescription 제거 — 이 키가 있으면 macOS가 마이크 권한 팝업을 띄움
+# 오디오 출력 전용(OutputStream)이므로 마이크 권한 불필요
+/usr/libexec/PlistBuddy -c "Delete :NSMicrophoneUsageDescription" "$INFO_PLIST" 2>/dev/null || true
+# 파일/볼륨 접근 권한 (음악 파일 및 ISO 로드)
+set_plist NSDesktopFolderUsageDescription "음악 파일을 열기 위해 접근합니다" string
+set_plist NSDocumentsFolderUsageDescription "음악 파일을 열기 위해 접근합니다" string
+set_plist NSDownloadsFolderUsageDescription "음악 파일을 열기 위해 접근합니다" string
+set_plist NSRemovableVolumesUsageDescription "외장 드라이브의 음악 파일 및 SACD ISO를 재생합니다" string
 
-# ── 7. 임시 코드사이닝 (ad-hoc) ─────────────────────────────────
+# ── 7. scipy 불필요 파일 제거 (용량 최적화) ──────────────────────
+echo "▶ scipy 테스트/문서 파일 제거 (용량 최적화)..."
+for SEARCH_DIR in "$APP_PATH/Contents/Frameworks" "$APP_PATH/Contents/Resources"; do
+  # 테스트 디렉토리 삭제
+  find "$SEARCH_DIR" -type d -name "tests" 2>/dev/null | xargs rm -rf 2>/dev/null || true
+  # 소스/컴파일 파일 삭제
+  find "$SEARCH_DIR" -name "*.pyx" -delete 2>/dev/null || true
+  find "$SEARCH_DIR" -name "*.pxd" -delete 2>/dev/null || true
+  find "$SEARCH_DIR" -name "*.f" -delete 2>/dev/null || true
+  find "$SEARCH_DIR" -name "*.f90" -delete 2>/dev/null || true
+  # __pycache__ 삭제
+  find "$SEARCH_DIR" -type d -name "__pycache__" 2>/dev/null | xargs rm -rf 2>/dev/null || true
+done
+echo "  ✓ 불필요 파일 제거 완료"
+
+# ── 8. 임시 코드사이닝 (ad-hoc) ─────────────────────────────────
 # Apple 개발자 인증서가 없을 때는 ad-hoc 서명으로 Gatekeeper 우회 가능성 높임
 # 인증서 있으면 아래 주석 해제하고 IDENTITY에 인증서명 입력:
 # IDENTITY="Developer ID Application: 홍길동 (XXXXXXXXXX)"
 # codesign --force --deep --sign "$IDENTITY" --options runtime "$APP_PATH"
 
-echo "▶ Ad-hoc 코드사이닝 (자체서명)..."
-# --deep: 내부 프레임워크/dylib 전부 서명
-# -f: 기존 서명 덮어쓰기
-# '-': ad-hoc 서명 (인증서 불필요)
-codesign --force --deep --sign - "$APP_PATH" 2>/dev/null && echo "  ✓ ad-hoc 서명 완료" || echo "  ⚠ 서명 실패 (무시)"
+echo "▶ Ad-hoc 코드사이닝 (entitlements 포함)..."
+# entitlements.plist: 마이크 권한 팝업 억제 + 파일/볼륨 접근 명시
+ENTITLEMENTS="$DIR/entitlements.plist"
+if [ -f "$ENTITLEMENTS" ]; then
+  codesign --force --deep --sign -     --entitlements "$ENTITLEMENTS"     "$APP_PATH" 2>/dev/null     && echo "  ✓ ad-hoc 서명 완료 (entitlements 적용)"     || echo "  ⚠ 서명 실패 (무시)"
+else
+  codesign --force --deep --sign - "$APP_PATH" 2>/dev/null     && echo "  ✓ ad-hoc 서명 완료" || echo "  ⚠ 서명 실패 (무시)"
+fi
 
 # ── 8. Quarantine 속성 제거 ─────────────────────────────────────
 # 빌드된 앱에 quarantine 플래그가 붙으면 첫 실행 시 Gatekeeper 차단됨
@@ -217,5 +250,5 @@ echo "  방법1 (권장): DMG 열고 앱을 우클릭 → '열기' 클릭"
 echo "               '확인되지 않은 개발자' 경고창에서 '열기' 클릭"
 echo ""
 echo "  방법2: 터미널에서 아래 명령 실행 후 앱 실행"
-echo "         xattr -cr '/Applications/니콘 친게 HiFi Player.app'"
+echo "         xattr -cr '/Applications/Nikon Chinge HiFi Player.app'"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

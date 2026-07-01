@@ -373,7 +373,7 @@ class AudioEngine:
         self._lock = threading.Lock()
 
         # DSD
-        self._pcm_queue: queue.Queue = queue.Queue(maxsize=10)
+        self._pcm_queue: queue.Queue = queue.Queue(maxsize=30)
         self._decode_done: bool = False
         self._is_dsd: bool = False
         self._decode_stop: threading.Event = threading.Event()
@@ -691,10 +691,14 @@ class AudioEngine:
         if peak > 1.0:
             data = data / peak
         # 업샘플링 (비트퍼펙트 모드에서도 SR 고정이 설정된 경우에만 적용)
+        # 다운샘플링은 음질 저하 — 타겟 SR이 원본보다 낮으면 변환하지 않음
         target_sr = self._fixed_output_sr
-        if target_sr > 0 and target_sr != srate:
+        original_sr = srate
+        if target_sr > 0 and target_sr > srate:
             data = self._resample(data, srate, target_sr)
             srate = target_sr
+        elif target_sr > 0 and target_sr < srate:
+            print(f"[HiFi] 다운샘플링 차단: {srate}Hz → {target_sr}Hz 요청 무시 (원본 SR 유지)")
         self._pcm_data = data   # float64
         self._sample_rate = srate
         self._channels = data.shape[1]
@@ -702,10 +706,11 @@ class AudioEngine:
 
         info = self._extract_metadata(filepath)
         info.update({
-            'sample_rate': srate,
-            'channels': self._channels,
-            'duration': self._total_samples / srate,
-            'format': filepath.rsplit('.', 1)[-1].upper(),
+            'sample_rate':          srate,
+            'original_sample_rate': original_sr,   # 업샘플링 전 원본 SR
+            'channels':             self._channels,
+            'duration':             self._total_samples / srate,
+            'format':               filepath.rsplit('.', 1)[-1].upper(),
         })
         try:
             sf_info = sf.info(filepath)
@@ -1131,7 +1136,8 @@ class AudioEngine:
         # DoP 모드: DSD를 PCM으로 패킹하므로 출력 SR = DSD SR / 16
         if self._dop_mode and self._is_dsd:
             out_sr = max(176400, self._sample_rate // 16)
-        elif self._fixed_output_sr > 0:
+        elif self._fixed_output_sr > 0 and self._fixed_output_sr > self._sample_rate:
+            # 업샘플링만 허용 — 다운샘플은 원본 SR 유지
             out_sr = self._fixed_output_sr
         else:
             out_sr = self._sample_rate
@@ -1462,9 +1468,12 @@ class AudioEngine:
                 needed -= len(seg)
                 self._dsd_buf.pop(0)
 
+        _wait_count = 0
         while needed > 0:
             try:
-                chunk = self._pcm_queue.get_nowait()
+                # 최대 20ms 대기 (끊김 방지: 즉시 무음 삽입 대신 디코더 기다림)
+                chunk = self._pcm_queue.get(timeout=0.02)
+                _wait_count = 0
                 if len(chunk) >= needed:
                     result.append(chunk[:needed])
                     leftover = chunk[needed:]
@@ -1475,12 +1484,15 @@ class AudioEngine:
                     result.append(chunk)
                     needed -= len(chunk)
             except queue.Empty:
+                _wait_count += 1
                 if self._decode_done and not result:
                     return None
-                if needed > 0:
+                # 100ms(5회×20ms) 이상 기다렸으면 무음으로 채움 (진짜 끝이거나 오류)
+                if needed > 0 and _wait_count >= 5:
                     result.append(np.zeros((needed, out_ch), dtype=np.float32))
                     needed = 0
-                break
+                    break
+                # 아직 디코딩 중이면 계속 대기
 
         if not result:
             return None

@@ -45,27 +45,27 @@ EQ_BAND_LABELS = ["Low\n60Hz", "125Hz", "250Hz", "500Hz", "1kHz", "2kHz", "4kHz"
 # 색상 테마 (Roon 스타일 프리미엄 다크)
 # ─────────────────────────────────────────────────────────────
 DARK = {
-    'bg':          '#0a0a0f',   # 거의 순수 블랙
-    'panel':       '#111118',   # 좌측 패널
-    'panel2':      '#0e0e15',   # 우측/리스트 배경
-    'panel3':      '#161620',   # 카드/섹션 배경
-    'border':      '#1e1e2e',   # 매우 은은한 경계
-    'border2':     '#2a2a3a',   # 조금 더 강한 경계
-    'accent':      '#c8a96e',   # 골드 액센트 (Roon 스타일)
-    'accent2':     '#e0c88a',   # 밝은 골드
-    'accent_blue': '#4a9eff',   # 파란 액센트 (포맷 뱃지 등)
-    'text':        '#f0f0f4',   # 밝은 흰색
-    'text_dim':    '#9090b0',   # 보조 텍스트
-    'text_muted':  '#505070',   # 흐린 텍스트
-    'playing':     '#c8a96e',   # 재생 중 = 골드
-    'dsd':         '#e8a030',   # DSD 오렌지
+    'bg':          '#050508',   # 순수 블랙에 가까운 극암
+    'panel':       '#090910',   # 좌측 패널 — 더 짙게
+    'panel2':      '#07070e',   # 우측/리스트 배경
+    'panel3':      '#0f0f18',   # 카드/섹션 배경
+    'border':      '#161624',   # 경계선
+    'border2':     '#222232',   # 조금 더 강한 경계
+    'accent':      '#b8913a',   # 짙은 골드 액센트
+    'accent2':     '#d4a84e',   # 밝은 골드
+    'accent_blue': '#3a8eee',   # 파란 액센트
+    'text':        '#e8e8f0',   # 밝은 흰색
+    'text_dim':    '#787898',   # 보조 텍스트
+    'text_muted':  '#3a3a58',   # 흐린 텍스트
+    'playing':     '#b8913a',   # 재생 중 = 골드
+    'dsd':         '#d09020',   # DSD 오렌지
     'error':       '#ff4a4a',
-    'slider_bg':   '#1e1e2e',
-    'slider_fill': '#c8a96e',   # 골드 슬라이더
-    'btn':         '#16161e',
-    'btn_hover':   '#1e1e2e',
-    'btn_active':  '#2a2a3e',
-    'divider':     '#1a1a28',
+    'slider_bg':   '#161624',
+    'slider_fill': '#b8913a',   # 골드 슬라이더
+    'btn':         '#0e0e16',
+    'btn_hover':   '#161624',
+    'btn_active':  '#1e1e30',
+    'divider':     '#101020',
 }
 
 STYLESHEET = f"""

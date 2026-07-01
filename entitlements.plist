@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 오디오 출력 전용 — 마이크/입력 관련 키 선언 없음 (팝업 억제) -->
+    <!-- 파일 시스템 접근 -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+    <key>com.apple.security.files.downloads.read-only</key>
+    <true/>
+    <!-- 외장 볼륨 읽기 (SACD ISO) -->
+    <key>com.apple.security.files.bookmarks.app-scope</key>
+    <true/>
+    <!-- 네트워크 클라이언트 (UPnP) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>
