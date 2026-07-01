@@ -1659,15 +1659,30 @@ class HiFiPlayer(QMainWindow):
             )
             msg.setIcon(QMessageBox.Warning)
             msg.exec_()
-        # 현재 DSD 파일 재생 중이면 즉시 재로드하여 모드 전환 반영
-        if self.current_index >= 0:
-            track = self._track_at(self.current_index)
-            if track and hasattr(track, 'is_dsd') and track.is_dsd:
-                was_playing = (self.engine._state == 'playing')
-                pos = self.engine.current_position
-                self._start_track(self.current_index)
-                if was_playing:
-                    self.engine.seek(pos)
+        # 현재 DSD 파일 재생 중이면 재로드하여 모드 전환 반영
+        try:
+            if self.current_index >= 0:
+                track = self._track_at(self.current_index)
+                if track and hasattr(track, 'is_dsd') and track.is_dsd:
+                    was_playing = (getattr(self.engine, '_state', '') == 'playing')
+                    pos = 0
+                    try:
+                        pos = float(self.engine.current_position or 0)
+                    except Exception:
+                        pos = 0
+                    # 엔진 완전 정지 후 재시작 (Windows 스레드 충돌 방지)
+                    self.engine.stop()
+                    from PyQt5.QtCore import QTimer
+                    def _restart():
+                        try:
+                            self._start_track(self.current_index)
+                            if was_playing and pos > 0:
+                                self.engine.seek(pos)
+                        except Exception as e:
+                            print(f"[DoP] 재로드 오류: {e}")
+                    QTimer.singleShot(200, _restart)
+        except Exception as e:
+            print(f"[DoP] 토글 오류: {e}")
 
     def _on_bit_perfect_toggled(self, on: bool):
         self.engine.set_bit_perfect(on)

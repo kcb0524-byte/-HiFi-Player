@@ -745,7 +745,22 @@ class AudioEngine:
         error_box = [None]
         stop_ev = self._decode_stop
 
+        # Windows: WASAPI가 176.4kHz를 지원 안 하는 경우가 많아 192kHz로 리샘플
+        _WIN_DSD_TARGET_SR = 192000 if _IS_WIN else 0
+
         def chunk_cb(pcm, sr, info):
+            nonlocal _WIN_DSD_TARGET_SR
+            # Windows에서 176.4kHz → 192kHz 리샘플링
+            if _IS_WIN and _WIN_DSD_TARGET_SR > 0 and sr != _WIN_DSD_TARGET_SR:
+                try:
+                    from fractions import Fraction
+                    from scipy.signal import resample_poly
+                    f = Fraction(_WIN_DSD_TARGET_SR, sr).limit_denominator(256)
+                    pcm = resample_poly(pcm, f.numerator, f.denominator, axis=0).astype(np.float32)
+                    sr = _WIN_DSD_TARGET_SR
+                except Exception as e:
+                    print(f"[WIN] DSD 리샘플 실패: {e}, 원본 SR 유지")
+                    _WIN_DSD_TARGET_SR = 0
             if info:
                 self._sample_rate = sr
                 self._channels = pcm.shape[1] if pcm.ndim > 1 else 1
@@ -831,7 +846,21 @@ class AudioEngine:
         error_box = [None]
         stop_ev   = self._decode_stop
 
+        # Windows: WASAPI가 176.4kHz를 지원 안 하는 경우가 많아 192kHz로 리샘플
+        _WIN_DSD_TARGET_SR2 = 192000 if _IS_WIN else 0
+
         def chunk_cb(pcm, sr, info):
+            nonlocal _WIN_DSD_TARGET_SR2
+            if _IS_WIN and _WIN_DSD_TARGET_SR2 > 0 and sr != _WIN_DSD_TARGET_SR2:
+                try:
+                    from fractions import Fraction
+                    from scipy.signal import resample_poly
+                    f = Fraction(_WIN_DSD_TARGET_SR2, sr).limit_denominator(256)
+                    pcm = resample_poly(pcm, f.numerator, f.denominator, axis=0).astype(np.float32)
+                    sr = _WIN_DSD_TARGET_SR2
+                except Exception as e:
+                    print(f"[WIN] SACD 리샘플 실패: {e}, 원본 SR 유지")
+                    _WIN_DSD_TARGET_SR2 = 0
             if info:
                 self._sample_rate   = sr
                 self._channels      = pcm.shape[1] if pcm.ndim > 1 else 1
