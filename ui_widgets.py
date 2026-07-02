@@ -248,10 +248,31 @@ class CDWidget(QWidget):
         p.setPen(QPen(QColor(100, 75, 15), 1))
         p.drawEllipse(QPoint(0, 0), lr, lr)
 
-        # ── 5. (텍스트는 p.restore() 후 고정 좌표로 그림 — Windows 렌더링 글리치 방지)
+        # ── 5. 레이블 텍스트 — QPainterPath로 벡터 렌더링 ──────────
+        # drawText() 대신 addText()→fillPath() 사용:
+        # GDI 폰트 렌더러를 우회해 Windows 회전 좌표계에서도 글리치 없음
+        hole_r = int(r * 0.055)
+        fnt_top = QFont('Arial', max(5, int(lr * 0.30)), QFont.Bold)
+        fnt_sub = QFont('Arial', max(4, int(lr * 0.24)))
+        fm_top  = QFontMetrics(fnt_top)
+        fm_sub  = QFontMetrics(fnt_sub)
+
+        # "ZUNAS" — 구멍 위쪽
+        tw  = fm_top.horizontalAdvance("ZUNAS")
+        y_top = -hole_r - 4 - fm_top.descent()
+        path_top = QPainterPath()
+        path_top.addText(-tw / 2, y_top, fnt_top, "ZUNAS")
+        p.setPen(Qt.NoPen)
+        p.fillPath(path_top, QBrush(QColor(45, 28, 5)))
+
+        # "Music" — 구멍 아래쪽
+        tw2 = fm_sub.horizontalAdvance("Music")
+        y_bot = hole_r + 4 + fm_sub.ascent()
+        path_bot = QPainterPath()
+        path_bot.addText(-tw2 / 2, y_bot, fnt_sub, "Music")
+        p.fillPath(path_bot, QBrush(QColor(70, 48, 12)))
 
         # ── 6. 중앙 스핀들 구멍 ─────────────────────────────────
-        hole_r = int(r * 0.055)
         p.setBrush(QColor(8, 7, 10))
         p.setPen(QPen(QColor(60, 55, 70), 1))
         p.drawEllipse(QPoint(0, 0), hole_r, hole_r)
@@ -270,30 +291,6 @@ class CDWidget(QWidget):
         p.setBrush(hi)
         p.setPen(Qt.NoPen)
         p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
-
-        # ── 9. 레이블 텍스트 — 회전 없이 고정 위치 (Windows 렌더링 안정성) ──
-        # 회전 좌표계 밖에서 그려 플랫폼 무관하게 선명하게 렌더링
-        lr_abs = int(r * 0.28)   # 센터 레이블 반지름 (절대 좌표)
-        hole_r_abs = int(r * 0.055)
-        fnt_top = QFont('Arial', max(5, int(lr_abs * 0.30)), QFont.Bold)
-        fnt_sub = QFont('Arial', max(4, int(lr_abs * 0.24)))
-        fm_top = QFontMetrics(fnt_top)
-        fm_sub = QFontMetrics(fnt_sub)
-        p.setRenderHint(QPainter.TextAntialiasing)
-
-        # "ZUNAS" — 구멍 위쪽
-        p.setFont(fnt_top)
-        p.setPen(QColor(45, 28, 5))
-        tw = fm_top.horizontalAdvance("ZUNAS")
-        y_top = int(cy) - hole_r_abs - 4 - fm_top.descent()
-        p.drawText(int(cx - tw / 2), y_top, "ZUNAS")
-
-        # "Music" — 구멍 아래쪽
-        p.setFont(fnt_sub)
-        p.setPen(QColor(70, 48, 12))
-        tw2 = fm_sub.horizontalAdvance("Music")
-        y_bot = int(cy) + hole_r_abs + 4 + fm_sub.ascent()
-        p.drawText(int(cx - tw2 / 2), y_bot, "Music")
 
 
 # ─────────────────────────────────────────────────────────────
