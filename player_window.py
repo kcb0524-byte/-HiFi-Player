@@ -76,7 +76,7 @@ class HiFiPlayer(QMainWindow):
         self._load_devices()
         self._load_settings()
 
-        # Windows: DWM API로 타이틀바 다크 모드 적용
+        # Windows: DWM API로 타이틀바 다크 모드 적용 (showEvent에서 재호출)
         self._apply_dark_titlebar()
 
         # 글로벌 키보드 이벤트 필터 — 어떤 위젯이 포커스를 가져도 동작
@@ -1531,10 +1531,10 @@ class HiFiPlayer(QMainWindow):
         return f"{m}:{s:02d}"
 
     # ─────────────────────────────────────────────
-    # Windows 타이틀바 다크 모드
+    # Windows 타이틀바 다크 모드 + 아이콘 제거 + 텍스트 어둡게
     # ─────────────────────────────────────────────
     def _apply_dark_titlebar(self):
-        """Windows 10/11: DWM API로 타이틀바 다크 모드 + 아이콘 제거"""
+        """Windows 10/11: DWM API로 타이틀바 완전 커스터마이즈"""
         import sys
         if sys.platform != 'win32':
             return
@@ -1543,40 +1543,78 @@ class HiFiPlayer(QMainWindow):
             import ctypes.wintypes
 
             hwnd = int(self.winId())
+            if not hwnd:
+                return
 
-            # ── 1. 다크 타이틀바 ──────────────────────────────────
+            # ── 1. 다크 타이틀바 (Windows 10 Build 18985+) ───────
             DWMWA_USE_IMMERSIVE_DARK_MODE = 20
             value = ctypes.c_int(1)
             result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
                 ctypes.byref(value), ctypes.sizeof(value)
             )
-            if result != 0:
+            if result != 0:  # 구버전 Windows 10 fallback
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(
                     hwnd, 19, ctypes.byref(value), ctypes.sizeof(value)
                 )
 
-            # ── 2. 타이틀바 아이콘 제거 ───────────────────────────
-            # WinAPI: WM_SETICON으로 빈 아이콘 설정
-            WM_SETICON   = 0x0080
-            ICON_SMALL   = 0
-            ICON_BIG     = 1
-            GWL_STYLE    = -16
-            WS_SYSMENU   = 0x00080000
-            # 현재 스타일 읽기 후 SYSMENU 제거 → 아이콘+시스템 메뉴 숨김
-            # (최소화/최대화/닫기 버튼은 유지됨)
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-            # WS_SYSMENU 제거 시 닫기 버튼도 사라지므로 아이콘만 빈 값으로 대체
-            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, 0)
-            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, 0)
+            # ── 2. 타이틀 텍스트 색상 어둡게 (Windows 11 전용) ───
+            # DWMWA_TEXT_COLOR = 36: COLORREF 형식 (0x00BBGGRR)
+            # 어두운 회색 R=90,G=90,B=90 → 눈에 덜 띄는 부드러운 색
+            DWMWA_TEXT_COLOR = 36
+            text_color = ctypes.c_uint32(0x00505050)  # 0x00BBGGRR: 회색
+            try:
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, DWMWA_TEXT_COLOR,
+                    ctypes.byref(text_color), ctypes.sizeof(text_color)
+                )
+            except Exception:
+                pass  # Windows 10에서는 미지원, 무시
 
-            # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
-            # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
-            # 대신 타이틀 텍스트를 심플하게 변경
+            # ── 3. 타이틀바 배경색 다크로 (Windows 11) ──────────
+            # DWMWA_CAPTION_COLOR = 35: 타이틀바 배경색
+            DWMWA_CAPTION_COLOR = 35
+            bg_color = ctypes.c_uint32(0x001A1A2A)  # 0x00BBGGRR: 거의 검정
+            try:
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, DWMWA_CAPTION_COLOR,
+                    ctypes.byref(bg_color), ctypes.sizeof(bg_color)
+                )
+            except Exception:
+                pass
+
+            # ── 4. 아이콘 제거 — WS_EX_DLGMODALFRAME 방식 (가장 신뢰성 높음) ──
+            # WM_SETICON(0) 방식은 Qt가 나중에 덮어쓰는 경우가 있어
+            # WS_EX_DLGMODALFRAME 스타일을 적용해 타이틀바 아이콘 영역 자체를 제거
+            GWL_EXSTYLE         = -20
+            WS_EX_DLGMODALFRAME = 0x00000001
+            user32 = ctypes.windll.user32
+            cur_ex = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+            user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
+                                     cur_ex | WS_EX_DLGMODALFRAME)
+
+            # SetWindowPos로 프레임 강제 갱신 (이 단계 없으면 즉시 반영 안 됨)
+            SWP_NOMOVE      = 0x0002
+            SWP_NOSIZE      = 0x0001
+            SWP_NOZORDER    = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+
+            # ── 5. 타이틀 텍스트를 짧게 유지 ─────────────────────
             self.setWindowTitle("Nikon Chinge HiFi Player")
 
         except Exception:
             pass
+
+    def showEvent(self, event):
+        """창 표시 후 Windows 타이틀바 스타일 재적용 (winId 확정 후)"""
+        super().showEvent(event)
+        import sys
+        if sys.platform == 'win32':
+            from PyQt5.QtCore import QTimer
+            # 100ms 후 재적용 — Qt가 아이콘을 재설정하는 타이밍 이후
+            QTimer.singleShot(100, self._apply_dark_titlebar)
 
     # ─────────────────────────────────────────────
     # 키보드 단축키

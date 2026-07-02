@@ -248,28 +248,7 @@ class CDWidget(QWidget):
         p.setPen(QPen(QColor(100, 75, 15), 1))
         p.drawEllipse(QPoint(0, 0), lr, lr)
 
-        # ── 5. 레이블 텍스트 — LP와 함께 회전 ──────────────────
-        # 상단: ZUNAS, 하단: Player  (구멍 위/아래로 충분히 분리)
-        fnt_top = QFont('Arial', max(5, int(lr * 0.30)), QFont.Bold)
-        fnt_sub = QFont('Arial', max(4, int(lr * 0.24)))
-        fm_top = QFontMetrics(fnt_top)
-        fm_sub = QFontMetrics(fnt_sub)
-        hole_r = int(r * 0.055)  # 구멍 반지름 (6번 단계와 동일 비율)
-
-        # ZUNAS — 구멍 위쪽, 여유 있게
-        p.setFont(fnt_top)
-        p.setPen(QColor(45, 28, 5))
-        tw = fm_top.horizontalAdvance("ZUNAS")
-        # 텍스트 baseline이 구멍 상단에서 4px 위에 오도록
-        y_top = -(hole_r + 4 + fm_top.descent())
-        p.drawText(int(-tw / 2), y_top, "ZUNAS")
-
-        # Player — 구멍 아래쪽, 여유 있게
-        p.setFont(fnt_sub)
-        p.setPen(QColor(70, 48, 12))
-        tw2 = fm_sub.horizontalAdvance("Player")
-        y_bot = hole_r + 4 + fm_sub.ascent()
-        p.drawText(int(-tw2 / 2), y_bot, "Player")
+        # ── 5. (텍스트는 p.restore() 후 고정 좌표로 그림 — Windows 렌더링 글리치 방지)
 
         # ── 6. 중앙 스핀들 구멍 ─────────────────────────────────
         hole_r = int(r * 0.055)
@@ -291,6 +270,30 @@ class CDWidget(QWidget):
         p.setBrush(hi)
         p.setPen(Qt.NoPen)
         p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
+
+        # ── 9. 레이블 텍스트 — 회전 없이 고정 위치 (Windows 렌더링 안정성) ──
+        # 회전 좌표계 밖에서 그려 플랫폼 무관하게 선명하게 렌더링
+        lr_abs = int(r * 0.28)   # 센터 레이블 반지름 (절대 좌표)
+        hole_r_abs = int(r * 0.055)
+        fnt_top = QFont('Arial', max(5, int(lr_abs * 0.30)), QFont.Bold)
+        fnt_sub = QFont('Arial', max(4, int(lr_abs * 0.24)))
+        fm_top = QFontMetrics(fnt_top)
+        fm_sub = QFontMetrics(fnt_sub)
+        p.setRenderHint(QPainter.TextAntialiasing)
+
+        # "ZUNAS" — 구멍 위쪽
+        p.setFont(fnt_top)
+        p.setPen(QColor(45, 28, 5))
+        tw = fm_top.horizontalAdvance("ZUNAS")
+        y_top = int(cy) - hole_r_abs - 4 - fm_top.descent()
+        p.drawText(int(cx - tw / 2), y_top, "ZUNAS")
+
+        # "Music" — 구멍 아래쪽
+        p.setFont(fnt_sub)
+        p.setPen(QColor(70, 48, 12))
+        tw2 = fm_sub.horizontalAdvance("Music")
+        y_bot = int(cy) + hole_r_abs + 4 + fm_sub.ascent()
+        p.drawText(int(cx - tw2 / 2), y_bot, "Music")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1459,15 +1462,34 @@ class TrackItem:
         """빠른 메타데이터 로드 (재생 없이)"""
         name = Path(self.filepath).stem
         self.title = name
+        ext = Path(self.filepath).suffix.lower()
         try:
-            from mutagen import File as MutagenFile
-            tags = MutagenFile(self.filepath, easy=True)
-            if tags:
-                self.title  = str(tags.get('title',  [name])[0]) or name
-                self.artist = str(tags.get('artist', [''])[0])
-                self.album  = str(tags.get('album',  [''])[0])
-                if hasattr(tags, 'info') and hasattr(tags.info, 'length'):
-                    self.duration = tags.info.length
+            if ext == '.dsf':
+                # mutagen DSF: ID3 태그 + info.length (sample_count / sample_rate)
+                from mutagen.dsf import DSF as _DSF
+                tags = _DSF(self.filepath)
+                self.duration = tags.info.length
+                if tags.tags:
+                    t = tags.tags.get('TIT2')
+                    a = tags.tags.get('TPE1')
+                    al = tags.tags.get('TALB')
+                    if t:  self.title  = str(t)  or name
+                    if a:  self.artist = str(a)
+                    if al: self.album  = str(al)
+            elif ext == '.dff':
+                # mutagen DSDIFF: info.length 로 duration 읽기
+                from mutagen.dsdiff import DSDIFF as _DSDIFF
+                tags = _DSDIFF(self.filepath)
+                self.duration = tags.info.length
+            else:
+                from mutagen import File as MutagenFile
+                tags = MutagenFile(self.filepath, easy=True)
+                if tags:
+                    self.title  = str(tags.get('title',  [name])[0]) or name
+                    self.artist = str(tags.get('artist', [''])[0])
+                    self.album  = str(tags.get('album',  [''])[0])
+                    if hasattr(tags, 'info') and hasattr(tags.info, 'length'):
+                        self.duration = tags.info.length
         except Exception:
             pass
 

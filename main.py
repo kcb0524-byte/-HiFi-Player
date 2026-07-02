@@ -37,11 +37,11 @@ def main():
         app.setFont(font)
 
     window = HiFiPlayer()
+    window.show()
 
-    # 타이틀바 아이콘 제거 (빈 아이콘으로 대체)
+    # 타이틀바 아이콘 제거 — show() 이후 빈 아이콘 적용 (Qt 초기화 완료 후)
     window.setWindowIcon(QIcon())
 
-    window.show()
     sys.exit(app.exec_())
 
 
