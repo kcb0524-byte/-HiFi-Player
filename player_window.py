@@ -629,6 +629,7 @@ class HiFiPlayer(QMainWindow):
 
         self.playlist = PlaylistWidget()
         self.playlist.files_dropped.connect(self._add_file_list)
+        self.playlist.folder_dropped.connect(self._on_folder_dropped)
         self.playlist.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.playlist.remove_requested.connect(self._remove_track)
         self.playlist.clear_requested.connect(self._clear_playlist)
@@ -984,6 +985,7 @@ class HiFiPlayer(QMainWindow):
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.DontUseNativeDialog, True)
         dialog.setOption(QFileDialog.ShowDirsOnly, False)
+        dialog.setDirectory(os.path.expanduser("~"))
         # 다중 선택 활성화
         for view in dialog.findChildren(QListView):
             view.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -1023,6 +1025,11 @@ class HiFiPlayer(QMainWindow):
         item.setData(Qt.DisplayRole, folder_name)
         item.setFlags(Qt.ItemIsEnabled)   # 선택·드래그 불가
         self.playlist.addItem(item)
+
+    def _on_folder_dropped(self, folder_name: str, files: list):
+        """드래그로 폴더 드롭 시 구분선 삽입 후 파일 추가"""
+        self._insert_folder_separator(folder_name)
+        self._add_file_list(files)
 
     def _track_at(self, row: int) -> Optional[TrackItem]:
         """플레이리스트 row에서 TrackItem 반환"""

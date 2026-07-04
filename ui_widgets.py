@@ -1838,10 +1838,11 @@ class PlaylistDelegate(QStyledItemDelegate):
 # 드래그앤드롭 지원 플레이리스트 위젯
 # ─────────────────────────────────────────────────────────────
 class PlaylistWidget(QListWidget):
-    files_dropped = pyqtSignal(list)
-    remove_requested = pyqtSignal(int)   # row 번호
+    files_dropped = pyqtSignal(list)           # 개별 파일 드롭 (구분선 없음)
+    folder_dropped = pyqtSignal(str, list)     # (폴더명, 파일목록) — 구분선 포함
+    remove_requested = pyqtSignal(int)         # row 번호
     clear_requested = pyqtSignal()
-    row_moved = pyqtSignal(int, int)     # from_row, to_row
+    row_moved = pyqtSignal(int, int)           # from_row, to_row
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1885,16 +1886,19 @@ class PlaylistWidget(QListWidget):
 
     def dropEvent(self, event: QDropEvent):
         if event.mimeData().hasUrls():
-            # 외부 파일/폴더 드롭 — 기존 동작 유지
-            paths = []
+            # 외부 드롭: 폴더와 개별 파일을 분리 처리
+            loose_files = []   # 폴더 없이 직접 드롭된 파일들
             for url in event.mimeData().urls():
                 path = url.toLocalFile()
                 if os.path.isdir(path):
-                    paths.extend(self._collect_from_dir(path))
+                    folder_files = self._collect_from_dir(path)
+                    if folder_files:
+                        # 폴더 단위로 별도 시그널 → player_window에서 구분선 삽입
+                        self.folder_dropped.emit(os.path.basename(path), folder_files)
                 elif self._is_audio(path):
-                    paths.append(path)
-            if paths:
-                self.files_dropped.emit(paths)
+                    loose_files.append(path)
+            if loose_files:
+                self.files_dropped.emit(loose_files)
             event.acceptProposedAction()
         else:
             # 내부 드래그 — Copy 대신 Move로 처리
