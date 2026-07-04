@@ -62,7 +62,8 @@ else
 fi
 
 # ── 2. 이전 빌드 정리 ────────────────────────────────────────────
-rm -rf build dist
+chmod -R u+w build dist 2>/dev/null || true
+rm -rf build dist 2>/dev/null || true
 
 # ── 3. PyInstaller .app 번들 생성 ───────────────────────────────
 echo "▶ PyInstaller 빌드 (Apple Silicon arm64)..."

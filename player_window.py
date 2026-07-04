@@ -978,24 +978,36 @@ class HiFiPlayer(QMainWindow):
         self.playlist.addItem(item)
 
     def _add_folder(self):
-        """폴더 추가 — 비네이티브 다이얼로그로 다중 폴더 선택 지원"""
+        """폴더 추가.
+        macOS: 네이티브 Finder 다이얼로그 (사이드바에 외장 드라이브 자동 표시).
+        Windows/Linux: 비네이티브 다이얼로그로 다중 폴더 선택 지원.
+        """
         from PyQt5.QtWidgets import (QFileDialog, QListView, QTreeView,
                                      QAbstractItemView)
-        dialog = QFileDialog(self, "폴더 추가")
-        dialog.setFileMode(QFileDialog.Directory)
-        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
-        dialog.setOption(QFileDialog.ShowDirsOnly, False)
-        dialog.setDirectory(os.path.expanduser("~"))
-        # 다중 선택 활성화
-        for view in dialog.findChildren(QListView):
-            view.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        for view in dialog.findChildren(QTreeView):
-            view.setSelectionMode(QAbstractItemView.ExtendedSelection)
 
-        if not dialog.exec_():
-            return
+        if sys.platform == 'darwin':
+            # macOS: 네이티브 Finder 다이얼로그 — 외장 드라이브·NAS 사이드바 자동 표시
+            path = QFileDialog.getExistingDirectory(
+                self, "폴더 추가",
+                os.path.expanduser("~"),
+                QFileDialog.ShowDirsOnly
+            )
+            selected = [path] if path else []
+        else:
+            # Windows/Linux: 비네이티브 다이얼로그로 다중 폴더 선택
+            dialog = QFileDialog(self, "폴더 추가")
+            dialog.setFileMode(QFileDialog.Directory)
+            dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+            dialog.setOption(QFileDialog.ShowDirsOnly, False)
+            dialog.setDirectory(os.path.expanduser("~"))
+            for view in dialog.findChildren(QListView):
+                view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+            for view in dialog.findChildren(QTreeView):
+                view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+            if not dialog.exec_():
+                return
+            selected = [p for p in dialog.selectedFiles() if os.path.isdir(p)]
 
-        selected = [p for p in dialog.selectedFiles() if os.path.isdir(p)]
         if not selected:
             return
 
@@ -1010,7 +1022,6 @@ class HiFiPlayer(QMainWindow):
                     if Path(fname).suffix.lower() in AudioEngine.SUPPORTED_FORMATS:
                         files.append(os.path.join(root, fname))
             if files:
-                # 구분선 삽입 후 해당 폴더 트랙 추가
                 self._insert_folder_separator(os.path.basename(dirpath))
                 self._add_file_list(files)
                 any_added = True
