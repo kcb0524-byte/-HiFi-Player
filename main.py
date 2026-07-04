@@ -13,11 +13,29 @@ DSF/DFF(DSD), FLAC, WAV, AIFF, MP3 등 광범위한 포맷 지원
 """
 
 import sys
+import io
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
 
 from player_window import HiFiPlayer
+
+
+def _fix_win_encoding():
+    """Windows 콘솔 stdout/stderr를 UTF-8로 강제 설정 (한글 깨짐 방지)."""
+    if sys.platform != 'win32':
+        return
+    try:
+        import os
+        os.environ.setdefault('PYTHONUTF8', '1')
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        else:
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 
 def main():
@@ -46,4 +64,5 @@ def main():
 
 
 if __name__ == '__main__':
+    _fix_win_encoding()
     main()

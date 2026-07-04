@@ -1489,6 +1489,18 @@ class TrackItem:
                         self.duration = tags.info.length
         except Exception:
             pass
+        # WAV 전용 폴백: mutagen이 duration을 못 읽으면 내장 wave 모듈 사용
+        # (Windows에서 일부 WAV 파일 또는 경로 인코딩 문제로 mutagen 실패 시)
+        if ext == '.wav' and self.duration <= 0:
+            try:
+                import wave as _wave
+                with _wave.open(self.filepath, 'rb') as wf:
+                    frames = wf.getnframes()
+                    rate   = wf.getframerate()
+                    if rate > 0:
+                        self.duration = frames / rate
+            except Exception:
+                pass
 
     def display_text(self) -> str:
         if self.artist:
@@ -1646,11 +1658,43 @@ class PlaylistDelegate(QStyledItemDelegate):
     PLAYING_ROW = -1      # 현재 재생 중인 row (외부에서 설정)
 
     def sizeHint(self, option, index):
+        if index.data(Qt.UserRole) == 'separator':
+            return QSize(max(option.rect.width(), 100), 26)
         return QSize(max(option.rect.width(), 100), self.ROW_H)
 
     def paint(self, painter, option, index):
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
+
+        # ── 폴더 구분선 ────────────────────────────────────────
+        if index.data(Qt.UserRole) == 'separator':
+            rect = option.rect
+            folder_name = index.data(Qt.DisplayRole) or ''
+            # 배경
+            painter.fillRect(rect, QColor(DARK['bg']))
+            # 가로선
+            line_y = rect.top() + rect.height() // 2
+            painter.setPen(QPen(QColor(DARK['border']), 1))
+            painter.drawLine(rect.left() + 8, line_y,
+                             rect.left() + 18, line_y)
+            # 폴더 이름
+            font = QFont('SF Pro Display', 9)
+            font.setWeight(QFont.Medium)
+            painter.setFont(font)
+            painter.setPen(QColor(DARK['text_dim']))
+            fm = painter.fontMetrics()
+            text_x = rect.left() + 24
+            text_w = rect.width() - 32
+            text = fm.elidedText(folder_name, Qt.ElideMiddle, text_w)
+            painter.drawText(text_x, rect.top(),
+                             text_w, rect.height(),
+                             Qt.AlignLeft | Qt.AlignVCenter, text)
+            # 오른쪽 선
+            text_end = text_x + fm.horizontalAdvance(text) + 8
+            if text_end < rect.right() - 8:
+                painter.drawLine(text_end, line_y, rect.right() - 8, line_y)
+            painter.restore()
+            return
 
         row   = index.row()
         track = index.data(Qt.UserRole + 1)   # TrackItem
@@ -1797,6 +1841,7 @@ class PlaylistWidget(QListWidget):
     files_dropped = pyqtSignal(list)
     remove_requested = pyqtSignal(int)   # row 번호
     clear_requested = pyqtSignal()
+    row_moved = pyqtSignal(int, int)     # from_row, to_row
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1840,6 +1885,7 @@ class PlaylistWidget(QListWidget):
 
     def dropEvent(self, event: QDropEvent):
         if event.mimeData().hasUrls():
+            # 외부 파일/폴더 드롭 — 기존 동작 유지
             paths = []
             for url in event.mimeData().urls():
                 path = url.toLocalFile()
@@ -1851,7 +1897,37 @@ class PlaylistWidget(QListWidget):
                 self.files_dropped.emit(paths)
             event.acceptProposedAction()
         else:
-            super().dropEvent(event)
+            # 내부 드래그 — Copy 대신 Move로 처리
+            source_row = self.currentRow()
+            if source_row < 0:
+                event.ignore()
+                return
+            # 구분선(separator)은 드래그 불가
+            if self.item(source_row) and \
+               self.item(source_row).data(Qt.UserRole) == 'separator':
+                event.ignore()
+                return
+
+            target_item = self.itemAt(event.pos())
+            if target_item is not None:
+                target_row = self.row(target_item)
+                # 구분선 위로 드롭 시 그 아래로 이동
+                if target_item.data(Qt.UserRole) == 'separator':
+                    target_row += 1
+            else:
+                target_row = self.count()
+
+            if source_row == target_row:
+                event.ignore()
+                return
+
+            # 아이템과 데이터 보존하여 이동
+            item = self.takeItem(source_row)
+            insert_row = target_row if target_row < source_row else target_row - 1
+            self.insertItem(insert_row, item)
+            self.setCurrentRow(insert_row)
+            self.row_moved.emit(source_row, insert_row)
+            event.acceptProposedAction()
 
     def _collect_from_dir(self, dirpath: str) -> list:
         """폴더에서 지원 오디오 파일 재귀 수집 (macOS 숨김 파일 제외)"""

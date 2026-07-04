@@ -428,10 +428,30 @@ class HiFiPlayer(QMainWindow):
         self.lbl_rg_info = QLabel("—")
         self.lbl_rg_info.setFixedHeight(16)
         self.lbl_rg_info.setStyleSheet(f"color:transparent; font-size:11px; font-family:monospace;")
+        # Track / Album 모드 선택
+        self.combo_rg_mode = QComboBox()
+        self.combo_rg_mode.addItems(["Track", "Album"])
+        self.combo_rg_mode.setFixedWidth(68)
+        self.combo_rg_mode.setFixedHeight(22)
+        self.combo_rg_mode.setStyleSheet(f"""
+            QComboBox {{
+                background:{DARK['panel3']}; color:{DARK['text_dim']};
+                border:1px solid {DARK['border']}; border-radius:4px;
+                font-size:11px; padding:0 4px;
+            }}
+            QComboBox::drop-down {{ border:none; width:16px; }}
+            QComboBox QAbstractItemView {{
+                background:{DARK['panel']}; color:{DARK['text']};
+                selection-background-color:{DARK['btn_active']};
+            }}
+        """)
+        self.combo_rg_mode.currentTextChanged.connect(self._on_rg_mode_changed)
         self.toggle_rg = ToggleSwitch(checked=True)
         self.toggle_rg.toggled.connect(self._on_rg_toggled)
         rg_row.addWidget(rg_lbl)
         rg_row.addWidget(self.lbl_rg_info, 1)
+        rg_row.addWidget(self.combo_rg_mode)
+        rg_row.addSpacing(6)
         rg_row.addWidget(self.toggle_rg)
         lay.addLayout(rg_row)
         lay.addSpacing(10)
@@ -612,6 +632,7 @@ class HiFiPlayer(QMainWindow):
         self.playlist.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.playlist.remove_requested.connect(self._remove_track)
         self.playlist.clear_requested.connect(self._clear_playlist)
+        self.playlist.row_moved.connect(self._on_row_moved)
         # 헤더가 playlist를 직접 참조해 스크롤바 폭 실시간 계산
         self.pl_header.set_playlist(self.playlist)
         self.playlist.verticalScrollBar().rangeChanged.connect(
@@ -956,8 +977,28 @@ class HiFiPlayer(QMainWindow):
         self.playlist.addItem(item)
 
     def _add_folder(self):
-        dirpath = QFileDialog.getExistingDirectory(self, "폴더 추가", "")
-        if dirpath:
+        """폴더 추가 — 비네이티브 다이얼로그로 다중 폴더 선택 지원"""
+        from PyQt5.QtWidgets import (QFileDialog, QListView, QTreeView,
+                                     QAbstractItemView)
+        dialog = QFileDialog(self, "폴더 추가")
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        dialog.setOption(QFileDialog.ShowDirsOnly, False)
+        # 다중 선택 활성화
+        for view in dialog.findChildren(QListView):
+            view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        for view in dialog.findChildren(QTreeView):
+            view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+
+        if not dialog.exec_():
+            return
+
+        selected = [p for p in dialog.selectedFiles() if os.path.isdir(p)]
+        if not selected:
+            return
+
+        any_added = False
+        for dirpath in selected:
             files = []
             for root, dirs, filenames in os.walk(dirpath):
                 dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
@@ -967,9 +1008,21 @@ class HiFiPlayer(QMainWindow):
                     if Path(fname).suffix.lower() in AudioEngine.SUPPORTED_FORMATS:
                         files.append(os.path.join(root, fname))
             if files:
+                # 구분선 삽입 후 해당 폴더 트랙 추가
+                self._insert_folder_separator(os.path.basename(dirpath))
                 self._add_file_list(files)
-            else:
-                QMessageBox.information(self, "알림", "폴더에서 지원 오디오 파일을 찾을 수 없습니다.")
+                any_added = True
+
+        if not any_added:
+            QMessageBox.information(self, "알림", "폴더에서 지원 오디오 파일을 찾을 수 없습니다.")
+
+    def _insert_folder_separator(self, folder_name: str):
+        """폴더 구분선 아이템 삽입"""
+        item = QListWidgetItem()
+        item.setData(Qt.UserRole, 'separator')
+        item.setData(Qt.DisplayRole, folder_name)
+        item.setFlags(Qt.ItemIsEnabled)   # 선택·드래그 불가
+        self.playlist.addItem(item)
 
     def _track_at(self, row: int) -> Optional[TrackItem]:
         """플레이리스트 row에서 TrackItem 반환"""
@@ -1224,20 +1277,45 @@ class HiFiPlayer(QMainWindow):
         self._repeat_mode = (self._repeat_mode + 1) % 3
         self._update_repeat_style()
 
+    def _is_separator_row(self, row: int) -> bool:
+        """해당 row가 폴더 구분선인지 확인"""
+        item = self.playlist.item(row)
+        return item is not None and item.data(Qt.UserRole) == 'separator'
+
+    def _on_row_moved(self, from_row: int, to_row: int):
+        """드래그 이동 후 current_index 보정"""
+        if self.current_index == from_row:
+            self.current_index = to_row
+            self.playlist.set_playing_row(to_row)
+        elif from_row < self.current_index <= to_row:
+            self.current_index -= 1
+            self.playlist.set_playing_row(self.current_index)
+        elif to_row <= self.current_index < from_row:
+            self.current_index += 1
+            self.playlist.set_playing_row(self.current_index)
+
     def _prev_track(self):
-        if self.current_index > 0:
-            self._load_and_play(self.current_index - 1)
+        idx = self.current_index - 1
+        while idx >= 0 and self._is_separator_row(idx):
+            idx -= 1
+        if idx >= 0:
+            self._load_and_play(idx)
 
     def _next_track(self):
         total = self._track_count()
         if total == 0:
             return
         if self._shuffle:
-            idx = self.current_index
-            candidates = [i for i in range(total) if i != idx] if total > 1 else [0]
-            self._load_and_play(random.choice(candidates))
-        elif self.current_index < total - 1:
-            self._load_and_play(self.current_index + 1)
+            candidates = [i for i in range(total)
+                          if i != self.current_index and not self._is_separator_row(i)]
+            if candidates:
+                self._load_and_play(random.choice(candidates))
+        else:
+            idx = self.current_index + 1
+            while idx < total and self._is_separator_row(idx):
+                idx += 1
+            if idx < total:
+                self._load_and_play(idx)
 
     def _on_playback_finished(self):
         # 로딩 중이면 차단 (사용자가 다른 곡 클릭 중)
@@ -1267,19 +1345,29 @@ class HiFiPlayer(QMainWindow):
 
         # 셔플
         if self._shuffle:
-            candidates = [i for i in range(total) if i != self.current_index] if total > 1 else [0]
-            self._load_and_play(random.choice(candidates))
+            candidates = [i for i in range(total)
+                          if i != self.current_index and not self._is_separator_row(i)]
+            if candidates:
+                self._load_and_play(random.choice(candidates))
             return
 
-        # 전체 반복 — 마지막 곡이면 처음으로
+        # 다음 재생 가능 인덱스 탐색 (separator 건너뜀)
+        idx = self.current_index + 1
+        while idx < total and self._is_separator_row(idx):
+            idx += 1
+
+        # 전체 반복 — 끝에 다다르면 처음 트랙으로
         if self._repeat_mode == 2:
-            nxt = (self.current_index + 1) % total
-            self._load_and_play(nxt)
+            if idx >= total:
+                idx = 0
+                while idx < total and self._is_separator_row(idx):
+                    idx += 1
+            self._load_and_play(idx)
             return
 
         # 기본 — 다음 곡 없으면 정지
-        if self.current_index < total - 1:
-            self._load_and_play(self.current_index + 1)
+        if idx < total:
+            self._load_and_play(idx)
         else:
             self.seek_slider.setValue(0)
 
@@ -1668,6 +1756,10 @@ class HiFiPlayer(QMainWindow):
     # ─────────────────────────────────────────────
     def _on_rg_toggled(self, on: bool):
         self.engine.set_rg_enabled(on)
+
+    def _on_rg_mode_changed(self, mode_text: str):
+        """Track / Album 모드 전환"""
+        self.engine.set_rg_mode(mode_text.lower())
 
     def _on_dop_toggled(self, on: bool):
         """DoP (DSD over PCM) 모드 전환"""

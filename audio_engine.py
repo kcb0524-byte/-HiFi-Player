@@ -351,6 +351,7 @@ class AudioEngine:
         self._volume: float = 1.0
         self._rg_gain: float = 1.0   # ReplayGain 보정값 (선형 배율)
         self._rg_enabled: bool = True
+        self._rg_mode: str = 'track'  # 'track' or 'album'
         self._device_index: Optional[int] = None
 
         # ── HiFi 출력 품질 옵션 ──
@@ -915,9 +916,13 @@ class AudioEngine:
                 meta['genre']       = str(tags.get('genre',       [''])[0])
                 meta['tracknumber'] = str(tags.get('tracknumber', [''])[0])
 
-                # ReplayGain 태그 읽기 (track gain 우선, 없으면 album gain)
+                # ReplayGain 태그 읽기 (모드에 따라 우선순위 결정)
                 rg_db = None
-                for key in ('replaygain_track_gain', 'replaygain_album_gain'):
+                if self._rg_mode == 'album':
+                    _rg_keys = ('replaygain_album_gain', 'replaygain_track_gain')
+                else:
+                    _rg_keys = ('replaygain_track_gain', 'replaygain_album_gain')
+                for key in _rg_keys:
                     val = tags.get(key, [''])[0]
                     if val:
                         try:
@@ -1026,6 +1031,10 @@ class AudioEngine:
 
     def set_rg_enabled(self, enabled: bool):
         self._rg_enabled = enabled
+
+    def set_rg_mode(self, mode: str):
+        """'track' 또는 'album' 모드 설정. 다음 곡 로드 시 적용됨."""
+        self._rg_mode = mode if mode in ('track', 'album') else 'track'
 
     # ─────────────────────────────────────────────
     # 재생 제어

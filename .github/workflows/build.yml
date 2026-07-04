@@ -85,7 +85,8 @@ jobs:
 
       - name: installer.iss 생성
         run: |
-          @"
+          $iss = @"
+          #pragma encoding "utf-8"
           [Setup]
           AppName=Nikon Chinge HiFi Player
           AppVersion=1.0.0
@@ -103,19 +104,21 @@ jobs:
           Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
           [Tasks]
-          Name: "desktopicon"; Description: "바탕화면에 바로가기 만들기"; GroupDescription: "추가 작업:"
+          Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional tasks:"
 
           [Files]
           Source: "dist\Nikon Chinge HiFi Player\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
           Name: "{group}\Nikon Chinge HiFi Player"; Filename: "{app}\Nikon Chinge HiFi Player.exe"
-          Name: "{group}\제거"; Filename: "{uninstallexe}"
+          Name: "{group}\Uninstall"; Filename: "{uninstallexe}"
           Name: "{autodesktop}\Nikon Chinge HiFi Player"; Filename: "{app}\Nikon Chinge HiFi Player.exe"; Tasks: desktopicon
 
           [Run]
-          Filename: "{app}\Nikon Chinge HiFi Player.exe"; Description: "Nikon Chinge HiFi Player 실행"; Flags: nowait postinstall skipifsilent
-          "@ | Out-File -FilePath installer_win.iss -Encoding utf8
+          Filename: "{app}\Nikon Chinge HiFi Player.exe"; Description: "Launch Nikon Chinge HiFi Player"; Flags: nowait postinstall skipifsilent
+          "@
+          # UTF-8 BOM 포함으로 저장 — Inno Setup 6은 UTF-8 BOM을 올바르게 처리함
+          [System.IO.File]::WriteAllText("$PWD\installer_win.iss", $iss, [System.Text.UTF8Encoding]::new($true))
         shell: powershell
 
       - name: 설치 파일 생성 (Inno Setup)
