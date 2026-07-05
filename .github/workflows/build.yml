@@ -99,6 +99,7 @@ jobs:
           Compression=lzma2
           SolidCompression=yes
           WizardStyle=modern
+          ChangesAssociations=yes
 
           [Languages]
           Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
@@ -116,6 +117,29 @@ jobs:
 
           [Run]
           Filename: "{app}\Nikon Chinge HiFi Player.exe"; Description: "Launch Nikon Chinge HiFi Player"; Flags: nowait postinstall skipifsilent
+
+          [Registry]
+          ; ProgID 등록 — 앱 정보 및 열기 명령
+          Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile"; ValueType: string; ValueName: ""; ValueData: "Audio File"; Flags: uninsdeletekey
+          Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Nikon Chinge HiFi Player.exe,0"
+          Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Nikon Chinge HiFi Player.exe"" ""%1"""
+          ; 각 확장자 OpenWithProgids 등록 — 기존 기본 앱 유지, "연결 프로그램" 목록에 추가
+          Root: HKCR; Subkey: ".flac\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wav\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aiff\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aif\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".mp3\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".m4a\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aac\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".ogg\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".opus\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wv\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".ape\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".tta\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wma\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".dsf\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".dff\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".iso\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
           "@
           # UTF-8 BOM 포함으로 저장 — Inno Setup 6은 UTF-8 BOM을 올바르게 처리함
           [System.IO.File]::WriteAllText("$PWD\installer_win.iss", $iss, [System.Text.UTF8Encoding]::new($true))
@@ -196,6 +220,31 @@ jobs:
           find "dist/Nikon Chinge HiFi Player.app" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find "dist/Nikon Chinge HiFi Player.app" -name "*.pyx" -delete 2>/dev/null || true
           find "dist/Nikon Chinge HiFi Player.app" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Info.plist 파일 연결(CFBundleDocumentTypes) 등록
+        run: |
+          python3 - "dist/Nikon Chinge HiFi Player.app/Contents/Info.plist" <<'PYEOF'
+          import sys, plistlib
+          plist_path = sys.argv[1]
+          with open(plist_path, 'rb') as f:
+              plist = plistlib.load(f)
+          audio_exts = [
+              'flac', 'wav', 'aiff', 'aif',
+              'mp3', 'm4a', 'aac',
+              'ogg', 'opus',
+              'wv', 'ape', 'tta', 'wma',
+              'dsf', 'dff', 'iso',
+          ]
+          plist['CFBundleDocumentTypes'] = [{
+              'CFBundleTypeName': 'Audio File',
+              'CFBundleTypeExtensions': audio_exts,
+              'CFBundleTypeRole': 'Viewer',
+              'LSHandlerRank': 'Alternate',
+          }]
+          with open(plist_path, 'wb') as f:
+              plistlib.dump(plist, f)
+          print(f'CFBundleDocumentTypes 등록 완료 ({len(audio_exts)}개 확장자)')
+          PYEOF
 
       - name: ffmpeg 번들 포함
         run: cp $(which ffmpeg) "dist/Nikon Chinge HiFi Player.app/Contents/MacOS/ffmpeg"

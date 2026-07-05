@@ -862,6 +862,36 @@ class HiFiPlayer(QMainWindow):
         self._save_settings()  # 장치 변경 시 즉시 저장
 
     # ─────────────────────────────────────────────
+    # OS에서 파일 열기 (더블클릭 / 연결 프로그램)
+    # ─────────────────────────────────────────────
+    def open_file_from_os(self, filepath: str):
+        """Finder/탐색기 더블클릭 또는 '이 앱으로 열기'로 전달된 파일 처리.
+        플레이리스트에 추가하고 즉시 재생."""
+        from pathlib import Path
+        ext = Path(filepath).suffix.lower()
+        if ext not in AudioEngine.SUPPORTED_FORMATS:
+            return
+        self.raise_()
+        self.activateWindow()
+        if ext == '.iso':
+            self._add_sacd_iso_tracks(filepath, show_dialog=True)
+            return
+        # 플레이리스트에 추가 후 해당 트랙 즉시 재생
+        before = self.playlist.count()
+        self._add_file_list([filepath])
+        after = self.playlist.count()
+        if after > before:
+            # 방금 추가된 첫 번째 아이템 재생
+            new_row = before  # separator가 없으면 before == 추가된 row
+            for row in range(before, after):
+                item = self.playlist.item(row)
+                if item and item.data(Qt.UserRole) != 'separator':
+                    new_row = row
+                    break
+            self.playlist.setCurrentRow(new_row)
+            self._play_row(new_row)
+
+    # ─────────────────────────────────────────────
     # 파일 추가
     # ─────────────────────────────────────────────
     def _add_files(self):
