@@ -181,6 +181,60 @@ def _ca_get_device_id_by_name(name: str) -> int:
     return 0
 
 
+def _ca_get_device_uid(device_id: int) -> str:
+    """CoreAudio 장치 UID 문자열 반환.
+    miniaudio ma_device_id.coreaudio[256] 에 사용하는 null-terminated string.
+    예: 'AppleUSBAudio:1,4,0,0:0:{UID-String}'
+    """
+    if not _CA_AVAILABLE or device_id == 0:
+        return ''
+    try:
+        kAudioDevicePropertyDeviceUID = struct.unpack('>I', b'uid ')[0]
+        prop = _AudioObjectPropertyAddress(
+            mSelector=kAudioDevicePropertyDeviceUID,
+            mScope=_kAudioObjectPropertyScopeGlobal,
+            mElement=_kAudioObjectPropertyElementMain,
+        )
+        _cf.CFStringGetCString.restype  = ctypes.c_bool
+        _cf.CFStringGetCString.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+        cf_str = ctypes.c_void_p(0)
+        data_size = ctypes.c_uint32(ctypes.sizeof(cf_str))
+        ret = _ca.AudioObjectGetPropertyData(
+            device_id, ctypes.byref(prop),
+            0, None, ctypes.byref(data_size), ctypes.byref(cf_str))
+        if ret == 0 and cf_str.value:
+            buf = ctypes.create_string_buffer(512)
+            ok  = _cf.CFStringGetCString(cf_str.value, buf, 512, 0x08000100)  # UTF-8
+            _cf.CFRelease(cf_str.value)
+            if ok:
+                uid = buf.value.decode('utf-8', errors='replace')
+                print(f'[CoreAudio] 장치 UID: "{uid}"')
+                return uid
+    except Exception as e:
+        print(f'[CoreAudio] UID 조회 실패: {e}')
+    return ''
+
+
+def _ca_make_miniaudio_device_id(device_name: str):
+    """장치 이름 → miniaudio PlaybackDevice(device_id=...) 에 넘길 bytes 생성.
+    miniaudio CoreAudio 백엔드의 ma_device_id.coreaudio[256] = UID 문자열(null-padded).
+    반환: 256-byte bytes 또는 None (기본 장치 사용)
+    """
+    ca_id = _ca_get_device_id_by_name(device_name)
+    if ca_id == 0:
+        print(f'[CoreAudio] 장치 "{device_name}" 를 찾을 수 없음 — 기본 장치 사용')
+        return None
+    uid = _ca_get_device_uid(ca_id)
+    if not uid:
+        print(f'[CoreAudio] UID 없음 — 기본 장치 사용')
+        return None
+    uid_bytes = uid.encode('utf-8')[:255]
+    result = uid_bytes + b'\x00' * (256 - len(uid_bytes))
+    print(f'[CoreAudio→miniaudio] "{device_name}" → 256bytes device_id 생성 완료')
+    return result
+
+
 def _ca_hog_device(device_id: int) -> int:
     """CoreAudio 독점 모드 획득. 반환값: 이전 hog PID (-1=없음, 성공시 현재 PID)"""
     if not _CA_AVAILABLE or device_id == 0:
@@ -279,16 +333,22 @@ def _ca_set_buffer_size(device_id: int, frames: int) -> bool:
 
 
 def _ma_get_device_id_by_name(name: str):
-    """miniaudio 장치 목록에서 이름으로 device_id(bytes) 반환 (macOS CoreAudio 전용)"""
+    """miniaudio 장치 목록에서 이름으로 device_id 반환 (레거시 — macOS는 _ca_make_miniaudio_device_id 사용)"""
     if not MA_AVAILABLE or not name:
         return None
     try:
         devices = miniaudio.Devices()
         for dev in devices.get_playbacks():
-            dev_name = getattr(dev, 'name', '') or ''
-            if name.lower() in dev_name.lower() or dev_name.lower() in name.lower():
+            # dict 또는 object 모두 지원
+            if isinstance(dev, dict):
+                dev_name = dev.get('name', '') or ''
+                dev_id   = dev.get('id')
+            else:
+                dev_name = getattr(dev, 'name', '') or ''
+                dev_id   = getattr(dev, 'id', None)
+            if dev_name and (name.lower() in dev_name.lower() or dev_name.lower() in name.lower()):
                 print(f'[miniaudio] 장치 매칭: "{dev_name}"')
-                return dev.id
+                return dev_id
     except Exception as e:
         print(f'[miniaudio] 장치 검색 실패: {e}')
     return None
@@ -384,6 +444,7 @@ class AudioEngine:
         self._ca_device_id: int = 0          # macOS CoreAudio 장치 ID
         self._ca_hogged: bool = False        # CoreAudio 독점 중 여부
         self._selected_device_name: str = '' # 선택된 장치 이름 (CoreAudio ID 매핑용)
+        self._ma_device_id = None            # miniaudio cdata device_id (macOS 직접 전달용)
 
         # 재생 상태 — generator가 읽는 플래그
         self._state: str = 'idle'        # 'idle' | 'playing' | 'paused'
@@ -475,14 +536,26 @@ class AudioEngine:
                 all_devs = miniaudio.Devices()
                 playback = all_devs.get_playbacks()
                 for d in playback:
+                    # dict vs object 모두 지원
+                    if isinstance(d, dict):
+                        dev_id   = d.get('id')
+                        dev_name = d.get('name', '')
+                        max_ch   = d.get('maxChannels', 2)
+                        min_sr   = d.get('minSampleRate', 44100)
+                    else:
+                        dev_id   = getattr(d, 'id', None)
+                        dev_name = getattr(d, 'name', '')
+                        max_ch   = getattr(d, 'maxChannels', 2)
+                        min_sr   = getattr(d, 'minSampleRate', 44100)
+                    print(f'[Device] 발견: "{dev_name}" id={repr(dev_id)} type={type(dev_id).__name__}')
                     dev = AudioDevice(
-                        index=d['id'],
-                        name=d['name'],
-                        max_output_channels=d.get('maxChannels', 2),
-                        default_samplerate=d.get('minSampleRate', 44100),
+                        index=dev_id,
+                        name=dev_name,
+                        max_output_channels=max_ch,
+                        default_samplerate=min_sr,
                         hostapi_name='',
                     )
-                    dev.device_id = d['id']
+                    dev.device_id = dev_id
                     devices.append(dev)
             except Exception as e:
                 print(f'[Device] miniaudio 장치 목록 조회 실패: {e}')
@@ -498,10 +571,11 @@ class AudioEngine:
         )
         return dev
 
-    def set_output_device(self, device_index, device_name: str = ''):
+    def set_output_device(self, device_index, device_name: str = '', ma_device_id=None):
         """출력 장치 변경 — 장치를 바꿔야 하므로 재시작 불가피"""
         self._device_index = device_index
         self._selected_device_name = device_name  # CoreAudio ID 매핑에 사용
+        self._ma_device_id = ma_device_id          # miniaudio cdata (macOS 직접 사용)
         # sample_rate가 0이면 파일이 로드되지 않은 초기 상태 → 장치만 저장하고 열기는 나중에
         if self._sample_rate == 0:
             self._close_device()
@@ -1228,13 +1302,13 @@ class AudioEngine:
 
         ma_device_id = None
         if _IS_MAC:
-            # _device_index에 miniaudio bytes ID가 직접 저장된 경우 그대로 사용 (가장 안정적)
-            if isinstance(self._device_index, (bytes, bytearray)) and self._device_index:
-                ma_device_id = bytes(self._device_index)
-                print(f'[miniaudio] 장치 ID 직접 사용 ({len(ma_device_id)}bytes)')
+            # 1순위: miniaudio가 열거한 cdata device_id 직접 사용 (이름 변환 없이)
+            if self._ma_device_id is not None:
+                ma_device_id = self._ma_device_id
+                print(f'[Device] macOS cdata device_id 직접 사용 → "{self._selected_device_name}"')
+            # 2순위: CoreAudio UID로 변환 시도 (fallback)
             elif self._selected_device_name:
-                # fallback: 이름으로 검색
-                ma_device_id = _ma_get_device_id_by_name(self._selected_device_name)
+                ma_device_id = _ca_make_miniaudio_device_id(self._selected_device_name)
 
         # ── 시도 순서 결정 ──
         # Windows: sounddevice(PortAudio/WASAPI) → WASAPI Exclusive → miniaudio shared → 기본

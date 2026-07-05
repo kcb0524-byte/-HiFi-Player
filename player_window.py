@@ -856,9 +856,10 @@ class HiFiPlayer(QMainWindow):
         if idx < 0 or idx >= len(self._devices):
             return
         dev = self._devices[idx]
-        device_index = dev.index if dev else None
-        device_name = dev.name if dev else ''
-        self.engine.set_output_device(device_index, device_name)
+        device_index  = dev.index if dev else None
+        device_name   = dev.name  if dev else ''
+        ma_device_id  = getattr(dev, 'device_id', None) if dev else None
+        self.engine.set_output_device(device_index, device_name, ma_device_id=ma_device_id)
         self._save_settings()  # 장치 변경 시 즉시 저장
 
     # ─────────────────────────────────────────────
@@ -1982,7 +1983,8 @@ class HiFiPlayer(QMainWindow):
                         self.device_combo.blockSignals(True)
                         self.device_combo.setCurrentIndex(i)
                         self.device_combo.blockSignals(False)
-                        self.engine.set_output_device(dev.index, dev.name)
+                        ma_device_id = getattr(dev, 'device_id', None)
+                        self.engine.set_output_device(dev.index, dev.name, ma_device_id=ma_device_id)
                         break
             # 플레이리스트 복원
             playlist_paths = data.get('playlist', [])
