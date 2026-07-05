@@ -278,6 +278,22 @@ def _ca_set_buffer_size(device_id: int, frames: int) -> bool:
     return False
 
 
+def _ma_get_device_id_by_name(name: str):
+    """miniaudio 장치 목록에서 이름으로 device_id(bytes) 반환 (macOS CoreAudio 전용)"""
+    if not MA_AVAILABLE or not name:
+        return None
+    try:
+        devices = miniaudio.Devices()
+        for dev in devices.get_playbacks():
+            dev_name = getattr(dev, 'name', '') or ''
+            if name.lower() in dev_name.lower() or dev_name.lower() in name.lower():
+                print(f'[miniaudio] 장치 매칭: "{dev_name}"')
+                return dev.id
+    except Exception as e:
+        print(f'[miniaudio] 장치 검색 실패: {e}')
+    return None
+
+
 # ─────────────────────────────────────────────
 # DoP (DSD over PCM) 유틸리티
 # ─────────────────────────────────────────────
@@ -1192,11 +1208,8 @@ class AudioEngine:
         self._device_samplerate = out_sr
         self._device_channels = out_channels
 
-        # ── macOS: CoreAudio 버퍼 최소화만 적용 ──────────────────────
-        # Hog(독점)는 장치 라우팅을 고정시켜 출력 장치 변경을 방해하므로 사용 안 함
-        # miniaudio + REALTIME 스레드 + 50ms 버퍼로 충분한 품질 확보
+        # ── macOS: CoreAudio 버퍼 최소화 ────────────────────────────────
         if _IS_MAC:
-            # 선택 장치의 CoreAudio ID로 버퍼 크기만 최소화
             ca_dev = 0
             if self._selected_device_name:
                 ca_dev = _ca_get_device_id_by_name(self._selected_device_name)
@@ -1205,29 +1218,41 @@ class AudioEngine:
             if ca_dev:
                 self._ca_device_id = ca_dev
                 _ca_set_buffer_size(ca_dev, 512)
-            self._ca_hogged = False  # Hog 미사용
+            self._ca_hogged = False
 
-        device_id = None
+        # Windows: sounddevice/WASAPI 인덱스 (정수)
+        # macOS: miniaudio device_id (bytes) — sounddevice 인덱스와 다름
+        sd_device_id = None
         if self._device_index is not None:
-            device_id = self._device_index
+            sd_device_id = self._device_index
+
+        ma_device_id = None
+        if _IS_MAC:
+            # _device_index에 miniaudio bytes ID가 직접 저장된 경우 그대로 사용 (가장 안정적)
+            if isinstance(self._device_index, (bytes, bytearray)) and self._device_index:
+                ma_device_id = bytes(self._device_index)
+                print(f'[miniaudio] 장치 ID 직접 사용 ({len(ma_device_id)}bytes)')
+            elif self._selected_device_name:
+                # fallback: 이름으로 검색
+                ma_device_id = _ma_get_device_id_by_name(self._selected_device_name)
 
         # ── 시도 순서 결정 ──
         # Windows: sounddevice(PortAudio/WASAPI) → WASAPI Exclusive → miniaudio shared → 기본
-        # macOS  : miniaudio CoreAudio → miniaudio 기본
+        # macOS  : miniaudio CoreAudio (장치 지정) → miniaudio 기본
         open_attempts = []
 
         if _IS_WIN:
-            open_attempts.append(('sounddevice', device_id))
+            open_attempts.append(('sounddevice', sd_device_id))
             if self._exclusive_mode and MA_AVAILABLE:
-                open_attempts.append(('wasapi_exclusive', device_id))
+                open_attempts.append(('wasapi_exclusive', sd_device_id))
             if MA_AVAILABLE:
-                open_attempts.append(('miniaudio_shared', device_id))
-            if device_id is not None and MA_AVAILABLE:
+                open_attempts.append(('miniaudio_shared', sd_device_id))
+            if sd_device_id is not None and MA_AVAILABLE:
                 open_attempts.append(('miniaudio_shared', None))
         else:
             if MA_AVAILABLE:
-                open_attempts.append(('miniaudio_coreaudio', device_id))
-            if MA_AVAILABLE and device_id is not None:
+                open_attempts.append(('miniaudio_coreaudio', ma_device_id))
+            if MA_AVAILABLE and ma_device_id is not None:
                 open_attempts.append(('miniaudio_coreaudio', None))
 
         last_error = None

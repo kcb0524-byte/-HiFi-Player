@@ -889,7 +889,7 @@ class HiFiPlayer(QMainWindow):
                     new_row = row
                     break
             self.playlist.setCurrentRow(new_row)
-            self._play_row(new_row)
+            self._load_and_play(new_row)
 
     # ─────────────────────────────────────────────
     # 파일 추가
