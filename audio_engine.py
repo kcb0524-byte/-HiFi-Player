@@ -500,6 +500,16 @@ class AudioEngine:
         self._eq_sos: Optional[np.ndarray] = None   # shape (n_bands, 6)
         self._eq_lock = threading.Lock()
 
+        # ── Windows: WASAPI 사전 초기화 ──────────────────────────────────────
+        # 첫 트랙 로드 시 TrackLoader 스레드 안에서 WASAPI 초기화가 일어나는 것을 방지.
+        # 앱 시작 시 미리 장치를 열어두면 _device is not None이 되어,
+        # load() 안에서 _open_device()를 호출하지 않아 terminate() 위험 제거.
+        if _IS_WIN and SD_AVAILABLE:
+            try:
+                self._open_device()
+            except Exception:
+                pass  # 실패해도 무시 — play() 호출 시 재시도
+
     # ─────────────────────────────────────────────
     # 장치 관리
     # ─────────────────────────────────────────────
@@ -643,7 +653,11 @@ class AudioEngine:
             self._decode_stopped.set()
 
         # 샘플레이트/채널이 바뀐 경우에만 장치 재시작 (불가피)
-        if self._sample_rate != prev_sr or self._channels != prev_ch or self._device is None:
+        # ※ _device is None 조건을 의도적으로 제거:
+        #   Windows에서 앱 시작 시 사전 초기화하므로 _device는 항상 not None.
+        #   None인 경우는 play()에서 _open_device()가 처리하므로 여기서 열 필요 없음.
+        #   (TrackLoader 스레드 안에서 WASAPI 초기화 → terminate() 충돌 방지)
+        if self._sample_rate != prev_sr or self._channels != prev_ch:
             self._close_device()
             self._open_device()
 

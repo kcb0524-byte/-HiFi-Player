@@ -1252,6 +1252,12 @@ class HiFiPlayer(QMainWindow):
 
         # 백그라운드 로드
         if self._loader and self._loader.isRunning():
+            # 구 로더의 시그널 먼저 끊기 — 완료 이벤트가 새 트랙 재생에 영향 없도록
+            try:
+                self._loader.loaded.disconnect()
+                self._loader.error.disconnect()
+            except TypeError:
+                pass
             self._loader.terminate()
         sacd_info = getattr(track, '_sacd_track_info', None)
         self._loader = TrackLoader(self.engine, track.filepath, sacd_track_info=sacd_info)
