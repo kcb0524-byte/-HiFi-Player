@@ -624,6 +624,7 @@ class AudioEngine:
 
         if ext in ('dsf', 'dff'):
             info = self._load_dsd(filepath)
+            # DSD: _decode_stopped는 decode_streaming 내부 스레드가 종료 시 set
         elif ext == 'iso':
             # SACD ISO: track_info가 있으면 해당 트랙, 없으면 첫 번째 트랙
             track_info = getattr(self, '_sacd_track_info', None)
@@ -634,8 +635,12 @@ class AudioEngine:
                 track_info = tracks[0]
             info = self._load_sacd(filepath, track_info)
             self._sacd_track_info = None  # 사용 후 초기화
+            # SACD: _decode_stopped는 decode_streaming 내부 스레드가 종료 시 set
         else:
             info = self._load_pcm(filepath)
+            # PCM: 별도 디코더 스레드 없음 → 즉시 완료 신호
+            # 다음 load() 호출 시 _decode_stopped.wait(2.0)가 즉시 통과하도록
+            self._decode_stopped.set()
 
         # 샘플레이트/채널이 바뀐 경우에만 장치 재시작 (불가피)
         if self._sample_rate != prev_sr or self._channels != prev_ch or self._device is None:
