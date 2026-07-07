@@ -1137,7 +1137,22 @@ class HiFiPlayer(QMainWindow):
         self.engine.stop()
         self.playlist.clear()
         self.current_index = -1
+        self.current_info = {}
         self.drop_hint.setVisible(True)
+        # 재생 정보 초기화
+        self.lbl_title.setText("—")
+        self.lbl_artist.setText("")
+        self.lbl_album.setText("")
+        self.lbl_format.setText("")
+        self.lbl_pos.setText("0:00")
+        self.lbl_dur.setText("0:00")
+        self.seek_slider.setValue(0)
+        self.art_stack.setCurrentIndex(0)   # CD 애니메이션으로 복귀
+        self.btn_play.set_icon("play")
+        if hasattr(self, 'mini_title'):
+            self.mini_title.setText("—")
+        if hasattr(self, 'mini_seek'):
+            self.mini_seek.setValue(0)
 
     def _sort_playlist(self, key: str, ascending: bool):
         """헤더 클릭 시 트랙 정렬. key: 'title'|'artist'|'format'|'dur'"""
