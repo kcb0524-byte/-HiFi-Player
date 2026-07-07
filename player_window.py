@@ -1355,6 +1355,13 @@ class HiFiPlayer(QMainWindow):
             idx -= 1
         if idx >= 0:
             self._load_and_play(idx)
+        else:
+            # 첫 번째 곡: 이전 곡 없음 → 현재 곡 처음으로 되감기
+            self.engine.seek(0)
+            self.seek_slider.setValue(0)
+            self.lbl_pos.setText("0:00")
+            if hasattr(self, 'mini_seek'):
+                self.mini_seek.setValue(0)
 
     def _next_track(self):
         total = self._track_count()
