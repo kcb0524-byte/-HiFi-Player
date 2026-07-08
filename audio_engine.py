@@ -487,14 +487,18 @@ class AudioEngine:
         # 각 밴드: (type, freq_hz, gain_db, q)
         self._eq_enabled: bool = False
         self._eq_params: list = [
-            ('lowshelf',    60,  0.0, 0.7),
+            ('lowshelf',    32,  0.0, 0.7),
+            ('peak',        64,  0.0, 1.0),
             ('peak',       125,  0.0, 1.0),
             ('peak',       250,  0.0, 1.0),
             ('peak',       500,  0.0, 1.0),
             ('peak',      1000,  0.0, 1.0),
             ('peak',      2000,  0.0, 1.0),
             ('peak',      4000,  0.0, 1.0),
-            ('highshelf', 12000, 0.0, 0.7),
+            ('peak',      6000,  0.0, 1.0),
+            ('peak',      8000,  0.0, 1.0),
+            ('peak',     16000,  0.0, 1.0),
+            ('highshelf', 20000, 0.0, 0.7),
         ]
         # generator 스레드가 읽는 계수 (atomic 교체)
         self._eq_sos: Optional[np.ndarray] = None   # shape (n_bands, 6)

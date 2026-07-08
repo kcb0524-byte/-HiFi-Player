@@ -300,36 +300,45 @@ class EQGraph(QWidget):
     """Logic Pro 스타일 그래픽 EQ — 드래그로 gain/freq, 휠로 Q 조절"""
     params_changed = pyqtSignal(list)
 
-    N_BANDS = 8
+    N_BANDS = 12
     BANDS = [
-        ('lowshelf',    60,  0.7),
+        ('lowshelf',    32,  0.7),
+        ('peak',        64,  1.0),
         ('peak',       125,  1.0),
         ('peak',       250,  1.0),
         ('peak',       500,  1.0),
         ('peak',      1000,  1.0),
         ('peak',      2000,  1.0),
         ('peak',      4000,  1.0),
-        ('highshelf', 12000, 0.7),
+        ('peak',      6000,  1.0),
+        ('peak',      8000,  1.0),
+        ('peak',     16000,  1.0),
+        ('highshelf', 20000, 0.7),
     ]
     BAND_COLORS = [
-        QColor(255, 140,  60),
-        QColor(255, 210,  50),
-        QColor(100, 220,  80),
-        QColor( 50, 200, 180),
-        QColor( 60, 140, 255),
-        QColor(120,  80, 255),
-        QColor(200,  60, 220),
-        QColor(240,  80, 120),
+        QColor(255, 100,  40),   # 32Hz  — 주황
+        QColor(255, 170,  40),   # 64Hz  — 금
+        QColor(220, 220,  50),   # 125Hz — 노랑
+        QColor(100, 220,  80),   # 250Hz — 연두
+        QColor( 40, 200, 160),   # 500Hz — 청록
+        QColor( 50, 160, 255),   # 1kHz  — 하늘
+        QColor( 60, 100, 255),   # 2kHz  — 파랑
+        QColor(100,  60, 255),   # 4kHz  — 보라
+        QColor(160,  60, 240),   # 6kHz  — 연보라
+        QColor(210,  60, 200),   # 8kHz  — 마젠타
+        QColor(240,  80, 140),   # 16kHz — 핑크
+        QColor(255, 120, 100),   # 20kHz — 살구
     ]
     ML, MT, MR, MB = 34, 12, 8, 24   # margins
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._gains  = [0.0] * self.N_BANDS
-        self._qs     = [b[2] for b in self.BANDS]
-        self._freqs  = [float(b[1]) for b in self.BANDS]
-        self._drag_idx = -1
-        self._hover_idx = -1
+        self._gains      = [0.0] * self.N_BANDS
+        self._qs         = [b[2] for b in self.BANDS]
+        self._freqs      = [float(b[1]) for b in self.BANDS]
+        self._gain_range = 12.0   # ±6 또는 ±12 선택 가능
+        self._drag_idx   = -1
+        self._hover_idx  = -1
         self._drag_start = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -350,12 +359,14 @@ class EQGraph(QWidget):
         return 20.0 * (10 ** (t * math.log10(1000)))
 
     def _gy(self, gain):
-        h = self.height() - self.MT - self.MB
-        return self.MT + h * (1.0 - (gain + 12) / 24)
+        h  = self.height() - self.MT - self.MB
+        gr = self._gain_range
+        return self.MT + h * (1.0 - (gain + gr) / (gr * 2))
 
     def _yg(self, y):
-        h = self.height() - self.MT - self.MB
-        return max(-12.0, min(12.0, (1.0 - (y - self.MT) / h) * 24 - 12))
+        h  = self.height() - self.MT - self.MB
+        gr = self._gain_range
+        return max(-gr, min(gr, (1.0 - (y - self.MT) / h) * (gr * 2) - gr))
 
     # ── 필터 응답 계산 ──────────────────────────────────────
     @staticmethod
@@ -409,9 +420,12 @@ class EQGraph(QWidget):
         p.fillRect(0, 0, w, h, QColor(10, 10, 18))
         p.fillRect(self.ML, self.MT, gw, gh, QColor(14, 14, 24))
 
-        # dB 그리드
+        # dB 그리드 (gain_range에 따라 라벨 변경)
+        gr = self._gain_range
+        step = 3 if gr >= 12 else 2
+        grid_dbs = list(range(int(-gr), int(gr) + 1, step))
         p.setFont(QFont('Arial', 7))
-        for db in [-12, -9, -6, -3, 0, 3, 6, 9, 12]:
+        for db in grid_dbs:
             y = int(self._gy(db))
             is_zero = (db == 0)
             p.setPen(QPen(QColor(70, 70, 110) if is_zero else QColor(40, 40, 66),
@@ -523,7 +537,8 @@ class EQGraph(QWidget):
             sx, sy, sg, sf = self._drag_start
             dy = e.y() - sy
             gain = sg - dy * 0.14
-            gain = max(-12.0, min(12.0, round(gain * 2) / 2))
+            gr   = self._gain_range
+            gain = max(-gr, min(gr, round(gain * 2) / 2))
             self._gains[self._drag_idx] = gain
             if self.BANDS[self._drag_idx][0] == 'peak':
                 import math
@@ -590,6 +605,17 @@ class EQGraph(QWidget):
             self._gains[i] = float(gain)
             self._qs[i]    = float(q)
         self.update()
+
+    def set_gain_range(self, gain_range: float):
+        """±6 또는 ±12 범위 전환. 현재 게인을 새 범위로 클램프."""
+        self._gain_range = float(gain_range)
+        for i in range(self.N_BANDS):
+            self._gains[i] = max(-gain_range, min(gain_range, self._gains[i]))
+        self.update()
+        self._notify()
+
+    def get_gain_range(self) -> float:
+        return self._gain_range
 
 
 # ─────────────────────────────────────────────────────────────
@@ -805,10 +831,30 @@ class EQPanel(QWidget):
             "border:2px solid #2060d0;}")
         self.btn_onoff.clicked.connect(self._on_toggle)
 
+        # ±6dB / ±12dB 범위 선택 버튼
+        _rng_style = (
+            "QPushButton{background:#10101e;color:#505070;border:1px solid #202030;"
+            "border-radius:4px;font-size:11px;font-weight:bold;padding:2px 7px;}"
+            "QPushButton:checked{background:#1a1020;color:#d080ff;"
+            "border:2px solid #8040c0;}"
+            "QPushButton:hover{color:#9090d0;}")
+        self.btn_rng6  = QPushButton("±6dB")
+        self.btn_rng12 = QPushButton("±12dB")
+        for b in (self.btn_rng6, self.btn_rng12):
+            b.setCheckable(True)
+            b.setFixedHeight(26)
+            b.setStyleSheet(_rng_style)
+        self.btn_rng12.setChecked(True)   # 기본값 ±12dB
+        self.btn_rng6.clicked.connect(lambda: self._set_range(6))
+        self.btn_rng12.clicked.connect(lambda: self._set_range(12))
+
         hint = QLabel("드래그: gain/freq  •  휠: Q (대역폭)")
         hint.setStyleSheet("color:#9090c0;font-size:12px;")
 
         hdr.addWidget(self.btn_onoff)
+        hdr.addSpacing(8)
+        hdr.addWidget(self.btn_rng6)
+        hdr.addWidget(self.btn_rng12)
         hdr.addWidget(hint, 1)
         root.addLayout(hdr)
 
@@ -829,6 +875,13 @@ class EQPanel(QWidget):
         self._enabled = self.btn_onoff.isChecked()
         self.btn_onoff.setText("EQ ON" if self._enabled else "EQ OFF")
         self.enabled_changed.emit(self._enabled)
+
+    def _set_range(self, r: int):
+        """±6 또는 ±12 범위 전환"""
+        self.btn_rng6.setChecked(r == 6)
+        self.btn_rng12.setChecked(r == 12)
+        self.graph.set_gain_range(r)
+        self.params_changed.emit(self.graph.get_params())
 
     def _on_reset(self):
         self.graph.reset()
@@ -1883,6 +1936,18 @@ class PlaylistWidget(QListWidget):
             event.acceptProposedAction()
         else:
             super().dragMoveEvent(event)
+            # 드래그 중 상하단 경계에서 자동 스크롤
+            pos_y = event.pos().y()
+            margin = 40
+            vbar = self.verticalScrollBar()
+            if pos_y < margin:
+                # 상단 근처: 위로 스크롤 (경계에 가까울수록 빠르게)
+                speed = max(5, int((margin - pos_y) * 0.8))
+                vbar.setValue(vbar.value() - speed)
+            elif pos_y > self.height() - margin:
+                # 하단 근처: 아래로 스크롤
+                speed = max(5, int((pos_y - (self.height() - margin)) * 0.8))
+                vbar.setValue(vbar.value() + speed)
 
     def dropEvent(self, event: QDropEvent):
         if event.mimeData().hasUrls():

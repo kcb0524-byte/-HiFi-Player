@@ -1342,6 +1342,14 @@ class HiFiPlayer(QMainWindow):
     def _on_shuffle_clicked(self):
         self._shuffle = not self._shuffle
         self._update_shuffle_style()
+        # 셔플 ON + 재생 중이 아닌 경우 → 랜덤 곡 바로 선택해서 재생
+        if self._shuffle and not self.engine.is_playing and not self.engine.is_paused:
+            total = self._track_count()
+            if total > 0:
+                candidates = [i for i in range(total)
+                              if not self._is_separator_row(i)]
+                if candidates:
+                    self._load_and_play(random.choice(candidates))
 
     def _on_repeat_clicked(self):
         self._repeat_mode = (self._repeat_mode + 1) % 3
@@ -1967,10 +1975,22 @@ class HiFiPlayer(QMainWindow):
             self.vol_slider.setValue(data.get('volume', 80))
             # EQ 복원
             eq_enabled = data.get('eq_enabled', False)
-            eq_gains   = data.get('eq_gains',  [0.0] * 8)
+            eq_gains   = data.get('eq_gains',  [0.0] * 12)
             eq_freqs   = data.get('eq_freqs',  None)
             eq_qs      = data.get('eq_qs',     None)
             eq_preset  = data.get('eq_preset', 'Flat')
+            # 구버전(8밴드) 설정 호환: 12밴드로 패딩
+            if len(eq_gains) < 12:
+                eq_gains = list(eq_gains) + [0.0] * (12 - len(eq_gains))
+            if eq_freqs and len(eq_freqs) < 12:
+                from constants import EQ_BAND_LABELS
+                from ui_widgets import EQGraph
+                default_freqs = [float(b[1]) for b in EQGraph.BANDS]
+                eq_freqs = list(eq_freqs) + default_freqs[len(eq_freqs):]
+            if eq_qs and len(eq_qs) < 12:
+                from ui_widgets import EQGraph
+                default_qs = [b[2] for b in EQGraph.BANDS]
+                eq_qs = list(eq_qs) + default_qs[len(eq_qs):]
             raw_up = data.get('user_presets', {})
             user_presets = {}
             for k, v in raw_up.items():
