@@ -454,6 +454,34 @@ class HiFiPlayer(QMainWindow):
         rg_row.addSpacing(6)
         rg_row.addWidget(self.toggle_rg)
         lay.addLayout(rg_row)
+
+        # RG 타겟 음량 슬라이더 (-18 ~ -10 LUFS)
+        rg_target_row = QHBoxLayout()
+        rg_target_lbl = QLabel("RG Target")
+        rg_target_lbl.setStyleSheet(f"color:{DARK['text_dim']}; font-size:12px;")
+        self.lbl_rg_target = QLabel("-18 LUFS")
+        self.lbl_rg_target.setFixedWidth(64)
+        self.lbl_rg_target.setStyleSheet(
+            f"color:{DARK['accent']}; font-size:12px; font-family:monospace;")
+        self.slider_rg_target = QSlider(Qt.Horizontal)
+        self.slider_rg_target.setRange(-18, -10)   # LUFS 값 그대로 (음수)
+        self.slider_rg_target.setValue(-18)
+        self.slider_rg_target.setTickInterval(2)
+        self.slider_rg_target.setStyleSheet("""
+            QSlider::groove:horizontal { height:3px; background:#222232; border-radius:1px; }
+            QSlider::sub-page:horizontal { background:#b8913a; border-radius:1px; }
+            QSlider::handle:horizontal {
+                background:#d4a84e; border:none;
+                width:12px; height:12px; margin:-5px 0; border-radius:6px;
+            }
+        """)
+        self.slider_rg_target.valueChanged.connect(self._on_rg_target_changed)
+        rg_target_row.addWidget(rg_target_lbl)
+        rg_target_row.addSpacing(6)
+        rg_target_row.addWidget(self.slider_rg_target, 1)
+        rg_target_row.addSpacing(4)
+        rg_target_row.addWidget(self.lbl_rg_target)
+        lay.addLayout(rg_target_row)
         lay.addSpacing(10)
 
         # ── Output Device ──────────────────────────────────────
@@ -1846,6 +1874,11 @@ class HiFiPlayer(QMainWindow):
         """Track / Album 모드 전환"""
         self.engine.set_rg_mode(mode_text.lower())
 
+    def _on_rg_target_changed(self, value: int):
+        """RG 타겟 LUFS 슬라이더 변경"""
+        self.lbl_rg_target.setText(f"{value} LUFS")
+        self.engine.set_rg_target_lufs(float(value))
+
     def _on_dop_toggled(self, on: bool):
         """DoP (DSD over PCM) 모드 전환"""
         self.engine.set_dop_mode(on)
@@ -1975,22 +2008,28 @@ class HiFiPlayer(QMainWindow):
             self.vol_slider.setValue(data.get('volume', 80))
             # EQ 복원
             eq_enabled = data.get('eq_enabled', False)
-            eq_gains   = data.get('eq_gains',  [0.0] * 12)
+            eq_gains   = data.get('eq_gains',  [0.0] * 8)
             eq_freqs   = data.get('eq_freqs',  None)
             eq_qs      = data.get('eq_qs',     None)
             eq_preset  = data.get('eq_preset', 'Flat')
-            # 구버전(8밴드) 설정 호환: 12밴드로 패딩
-            if len(eq_gains) < 12:
-                eq_gains = list(eq_gains) + [0.0] * (12 - len(eq_gains))
-            if eq_freqs and len(eq_freqs) < 12:
-                from constants import EQ_BAND_LABELS
-                from ui_widgets import EQGraph
+            # 저장된 밴드 수가 8이 아닌 경우(구버전 호환): 8밴드로 맞춤
+            from ui_widgets import EQGraph
+            if len(eq_gains) > 8:
+                eq_gains = eq_gains[:8]
+            elif len(eq_gains) < 8:
+                eq_gains = list(eq_gains) + [0.0] * (8 - len(eq_gains))
+            if eq_freqs:
                 default_freqs = [float(b[1]) for b in EQGraph.BANDS]
-                eq_freqs = list(eq_freqs) + default_freqs[len(eq_freqs):]
-            if eq_qs and len(eq_qs) < 12:
-                from ui_widgets import EQGraph
+                if len(eq_freqs) >= 8:
+                    eq_freqs = list(eq_freqs)[:8]
+                else:
+                    eq_freqs = list(eq_freqs) + default_freqs[len(eq_freqs):]
+            if eq_qs:
                 default_qs = [b[2] for b in EQGraph.BANDS]
-                eq_qs = list(eq_qs) + default_qs[len(eq_qs):]
+                if len(eq_qs) >= 8:
+                    eq_qs = list(eq_qs)[:8]
+                else:
+                    eq_qs = list(eq_qs) + default_qs[len(eq_qs):]
             raw_up = data.get('user_presets', {})
             user_presets = {}
             for k, v in raw_up.items():
@@ -2008,6 +2047,10 @@ class HiFiPlayer(QMainWindow):
             dither_on  = data.get('dither', True)
             ups_idx    = data.get('upsample_idx', 0)
             dop_on     = data.get('dop_mode', False)
+            rg_target  = int(data.get('rg_target_lufs', -18))
+            self.slider_rg_target.setValue(rg_target)
+            self.lbl_rg_target.setText(f"{rg_target} LUFS")
+            self.engine.set_rg_target_lufs(float(rg_target))
             self.toggle_rg.setChecked(rg_on)
             self.engine.set_rg_enabled(rg_on)
             self.toggle_bp.setChecked(bp_on)
@@ -2104,6 +2147,7 @@ class HiFiPlayer(QMainWindow):
                 'dither':         self.toggle_dither.isChecked(),
                 'upsample_idx':   self.combo_upsample.currentIndex(),
                 'rg_enabled':     self.toggle_rg.isChecked(),
+                'rg_target_lufs': self.slider_rg_target.value(),
                 'dop_mode':       self.toggle_dop.isChecked(),
                 # 출력 장치
                 'output_device_name': saved_device_name,

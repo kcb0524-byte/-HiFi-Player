@@ -425,9 +425,10 @@ class AudioEngine:
         self._dsd_position: int = 0      # DSD 재생 위치 (샘플)
         self._total_samples: int = 0
         self._volume: float = 1.0
-        self._rg_gain: float = 1.0   # ReplayGain 보정값 (선형 배율)
+        self._rg_gain: float = 1.0        # ReplayGain 보정값 (선형 배율)
         self._rg_enabled: bool = True
-        self._rg_mode: str = 'track'  # 'track' or 'album'
+        self._rg_mode: str = 'track'      # 'track' or 'album'
+        self._rg_target_lufs: float = -18.0  # 타겟 음량 (-18 ~ -10 LUFS)
         self._device_index: Optional[int] = None
 
         # ── HiFi 출력 품질 옵션 ──
@@ -487,18 +488,14 @@ class AudioEngine:
         # 각 밴드: (type, freq_hz, gain_db, q)
         self._eq_enabled: bool = False
         self._eq_params: list = [
-            ('lowshelf',    32,  0.0, 0.7),
-            ('peak',        64,  0.0, 1.0),
-            ('peak',       125,  0.0, 1.0),
-            ('peak',       250,  0.0, 1.0),
-            ('peak',       500,  0.0, 1.0),
-            ('peak',      1000,  0.0, 1.0),
-            ('peak',      2000,  0.0, 1.0),
-            ('peak',      4000,  0.0, 1.0),
-            ('peak',      6000,  0.0, 1.0),
-            ('peak',      8000,  0.0, 1.0),
-            ('peak',     16000,  0.0, 1.0),
-            ('highshelf', 20000, 0.0, 0.7),
+            ('lowshelf',   32,  0.0, 0.7),
+            ('peak',      125,  0.0, 1.0),
+            ('peak',      250,  0.0, 1.0),
+            ('peak',      500,  0.0, 1.0),
+            ('peak',     1000,  0.0, 1.0),
+            ('peak',     2000,  0.0, 1.0),
+            ('peak',     4000,  0.0, 1.0),
+            ('highshelf',16000, 0.0, 0.7),
         ]
         # generator 스레드가 읽는 계수 (atomic 교체)
         self._eq_sos: Optional[np.ndarray] = None   # shape (n_bands, 6)
@@ -836,12 +833,14 @@ class AudioEngine:
         # ReplayGain 게인 결정
         rg_db = info.get('replaygain_db')
         if rg_db is not None:
-            # 태그 있음: dB → 선형 변환 (프리앰프 +0 dB)
-            self._rg_gain = float(10.0 ** (rg_db / 20.0))
+            # 태그 있음: RG 태그는 -18 LUFS 기준으로 저장됨
+            # 타겟이 -18이 아닌 경우 오프셋 보정
+            adjusted_db = rg_db + (self._rg_target_lufs - (-18.0))
+            self._rg_gain = float(10.0 ** (adjusted_db / 20.0))
             info['rg_source'] = f'Tag ({rg_db:+.1f} dB)'
         else:
-            # 태그 없음: RMS 측정으로 자동 계산
-            self._rg_gain = self._calc_rg_gain(data)
+            # 태그 없음: RMS 측정으로 자동 계산 (타겟 LUFS 적용)
+            self._rg_gain = self._calc_rg_gain(data, self._rg_target_lufs)
             gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
             info['rg_source'] = f'Auto ({gain_db:+.1f} dB)'
 
@@ -1148,6 +1147,10 @@ class AudioEngine:
     def set_rg_mode(self, mode: str):
         """'track' 또는 'album' 모드 설정. 다음 곡 로드 시 적용됨."""
         self._rg_mode = mode if mode in ('track', 'album') else 'track'
+
+    def set_rg_target_lufs(self, lufs: float):
+        """RG 타겟 음량 설정 (-18 ~ -10 LUFS). 다음 곡 로드 시 적용됨."""
+        self._rg_target_lufs = max(-18.0, min(-10.0, float(lufs)))
 
     # ─────────────────────────────────────────────
     # 재생 제어

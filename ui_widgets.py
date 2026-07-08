@@ -300,34 +300,26 @@ class EQGraph(QWidget):
     """Logic Pro 스타일 그래픽 EQ — 드래그로 gain/freq, 휠로 Q 조절"""
     params_changed = pyqtSignal(list)
 
-    N_BANDS = 12
+    N_BANDS = 8
     BANDS = [
-        ('lowshelf',    32,  0.7),
-        ('peak',        64,  1.0),
-        ('peak',       125,  1.0),
-        ('peak',       250,  1.0),
-        ('peak',       500,  1.0),
-        ('peak',      1000,  1.0),
-        ('peak',      2000,  1.0),
-        ('peak',      4000,  1.0),
-        ('peak',      6000,  1.0),
-        ('peak',      8000,  1.0),
-        ('peak',     16000,  1.0),
-        ('highshelf', 20000, 0.7),
+        ('lowshelf',   32,  0.7),
+        ('peak',      125,  1.0),
+        ('peak',      250,  1.0),
+        ('peak',      500,  1.0),
+        ('peak',     1000,  1.0),
+        ('peak',     2000,  1.0),
+        ('peak',     4000,  1.0),
+        ('highshelf',16000, 0.7),
     ]
     BAND_COLORS = [
         QColor(255, 100,  40),   # 32Hz  — 주황
-        QColor(255, 170,  40),   # 64Hz  — 금
         QColor(220, 220,  50),   # 125Hz — 노랑
         QColor(100, 220,  80),   # 250Hz — 연두
         QColor( 40, 200, 160),   # 500Hz — 청록
         QColor( 50, 160, 255),   # 1kHz  — 하늘
-        QColor( 60, 100, 255),   # 2kHz  — 파랑
-        QColor(100,  60, 255),   # 4kHz  — 보라
-        QColor(160,  60, 240),   # 6kHz  — 연보라
-        QColor(210,  60, 200),   # 8kHz  — 마젠타
-        QColor(240,  80, 140),   # 16kHz — 핑크
-        QColor(255, 120, 100),   # 20kHz — 살구
+        QColor( 80,  80, 255),   # 2kHz  — 파랑
+        QColor(160,  60, 240),   # 4kHz  — 보라
+        QColor(255, 120, 100),   # 16kHz — 살구
     ]
     ML, MT, MR, MB = 34, 12, 8, 24   # margins
 
@@ -848,7 +840,7 @@ class EQPanel(QWidget):
         self.btn_rng6.clicked.connect(lambda: self._set_range(6))
         self.btn_rng12.clicked.connect(lambda: self._set_range(12))
 
-        hint = QLabel("드래그: gain/freq  •  휠: Q (대역폭)")
+        hint = QLabel("드래그: gain/freq")
         hint.setStyleSheet("color:#9090c0;font-size:12px;")
 
         hdr.addWidget(self.btn_onoff)
