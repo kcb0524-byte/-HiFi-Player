@@ -1900,6 +1900,8 @@ class PlaylistWidget(QListWidget):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setAutoScroll(True)        # Qt 내장 자동스크롤 (Windows OLE DnD 호환)
+        self.setAutoScrollMargin(40)    # 상하 40px 경계에서 스크롤 시작
         self._drop_hint_widget = None  # 오버레이 참조
         # 커스텀 델리게이트 적용
         self._delegate = PlaylistDelegate(self)
@@ -1927,19 +1929,7 @@ class PlaylistWidget(QListWidget):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
         else:
-            super().dragMoveEvent(event)
-            # 드래그 중 상하단 경계에서 자동 스크롤
-            pos_y = event.pos().y()
-            margin = 40
-            vbar = self.verticalScrollBar()
-            if pos_y < margin:
-                # 상단 근처: 위로 스크롤 (경계에 가까울수록 빠르게)
-                speed = max(5, int((margin - pos_y) * 0.8))
-                vbar.setValue(vbar.value() - speed)
-            elif pos_y > self.height() - margin:
-                # 하단 근처: 아래로 스크롤
-                speed = max(5, int((pos_y - (self.height() - margin)) * 0.8))
-                vbar.setValue(vbar.value() + speed)
+            super().dragMoveEvent(event)  # Qt 내장 autoScroll이 처리
 
     def dropEvent(self, event: QDropEvent):
         if event.mimeData().hasUrls():
