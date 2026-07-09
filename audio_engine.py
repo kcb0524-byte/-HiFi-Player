@@ -765,20 +765,73 @@ class AudioEngine:
                 pass
 
         # ffmpeg로 원본 샘플레이트 그대로 f64le PCM 추출
-        cmd = [
-            ffmpeg_bin,
-            '-v', 'quiet',
+        # -err_detect ignore_err: 오래된/손상된 파일의 비트스트림 오류 무시
+        # -v error: 에러 메시지는 보이되 progress/info 등 잡음 제거
+        _common_flags = ['-err_detect', 'ignore_err']
+        cmd_filepath = [
+            ffmpeg_bin, '-v', 'error',
+            *_common_flags,
             '-i', filepath,
-            '-f', 'f64le',
-            '-acodec', 'pcm_f64le',
-            '-ar', str(srate),
-            '-ac', str(channels),
+            '-f', 'f64le', '-acodec', 'pcm_f64le',
+            '-ar', str(srate), '-ac', str(channels),
             'pipe:1'
         ]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_sp_kwargs)
-        if proc.returncode != 0 or not proc.stdout:
-            err = proc.stderr.decode('utf-8', errors='replace')[:400]
-            raise RuntimeError(f"ffmpeg 디코딩 실패: {err}")
+        cmd_stdin = [
+            ffmpeg_bin, '-v', 'error',
+            *_common_flags,
+            '-i', 'pipe:0',
+            '-f', 'f64le', '-acodec', 'pcm_f64le',
+            '-ar', str(srate), '-ac', str(channels),
+            'pipe:1'
+        ]
+
+        def _write_ffmpeg_log(reason: str, rc: int, stderr_txt: str):
+            """진단용 로그 파일 기록 (앱 설치 폴더에 hifi_error.log 생성)"""
+            try:
+                _log = os.path.join(_exe_dir, 'hifi_error.log')
+                with open(_log, 'a', encoding='utf-8') as _lf:
+                    _lf.write(f"--- ffmpeg 오류 ({reason}) ---\n")
+                    _lf.write(f"filepath : {filepath}\n")
+                    _lf.write(f"returncode: {rc}\n")
+                    _lf.write(f"stderr   : {stderr_txt}\n\n")
+            except Exception:
+                pass
+
+        proc = None
+        if _IS_WIN:
+            # Windows: 한글 등 비ASCII 경로는 subprocess가 ffmpeg에 잘못 전달될 수 있음
+            # 파일을 Python이 직접 읽어 stdin으로 피드 (경로 인코딩 완전 우회)
+            try:
+                with open(filepath, 'rb') as _fh:
+                    _file_bytes = _fh.read()
+                proc = subprocess.run(cmd_stdin, input=_file_bytes,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      **_sp_kwargs)
+                # stdin 방식 실패 시 filepath 직접 재시도
+                if proc.returncode != 0 or not proc.stdout:
+                    _write_ffmpeg_log(
+                        'stdin 실패→filepath 재시도',
+                        proc.returncode,
+                        proc.stderr.decode('utf-8', errors='replace'))
+                    proc = subprocess.run(cmd_filepath,
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                          **_sp_kwargs)
+            except Exception as _ex:
+                _write_ffmpeg_log('stdin exception', -1, str(_ex))
+                proc = subprocess.run(cmd_filepath,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      **_sp_kwargs)
+        else:
+            proc = subprocess.run(cmd_filepath,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        if proc is None or proc.returncode != 0 or not proc.stdout:
+            rc  = proc.returncode if proc else -1
+            err = proc.stderr.decode('utf-8', errors='replace') if proc else ''
+            _write_ffmpeg_log('최종 실패', rc, err)
+            # 오류 메시지에 returncode 포함 (진단 용이)
+            short_err = err[:300].strip() or '(stderr 없음)'
+            raise RuntimeError(f"ffmpeg 디코딩 실패 (rc={rc}): {short_err}")
 
         raw = np.frombuffer(proc.stdout, dtype=np.float64)
         if len(raw) == 0:
