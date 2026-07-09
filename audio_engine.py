@@ -797,40 +797,88 @@ class AudioEngine:
             except Exception:
                 pass
 
+        def _run_ffmpeg_filepath():
+            """filepath 직접 전달 방식 — stdin=DEVNULL로 GUI 앱 stdin 무효화 문제 방지"""
+            return subprocess.run(
+                cmd_filepath,
+                stdin=subprocess.DEVNULL,   # ← 핵심: GUI 앱에서 상속 stdin이 없으므로 명시적 무효화
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **_sp_kwargs)
+
+        def _run_ffmpeg_tmpfile():
+            """파이프를 전혀 쓰지 않는 최후 수단: ffmpeg → 임시 WAV → soundfile 읽기"""
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as _tmp:
+                _tmp_path = _tmp.name
+            try:
+                _cmd_wav = [
+                    ffmpeg_bin, '-y', '-v', 'error',
+                    '-err_detect', 'ignore_err',
+                    '-i', filepath,
+                    '-ar', str(srate), '-ac', str(channels),
+                    '-f', 'wav', '-acodec', 'pcm_s24le',
+                    _tmp_path
+                ]
+                _pr = subprocess.run(
+                    _cmd_wav,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    **_sp_kwargs)
+                if _pr.returncode == 0 and os.path.getsize(_tmp_path) > 0:
+                    import soundfile as _sf2
+                    _d, _sr = _sf2.read(_tmp_path, dtype='float64', always_2d=True)
+                    return _d, _sr, None   # (data, srate, error)
+                else:
+                    return None, None, _pr.stderr.decode('utf-8', errors='replace')
+            except Exception as _te:
+                return None, None, str(_te)
+            finally:
+                try:
+                    os.unlink(_tmp_path)
+                except Exception:
+                    pass
+
         proc = None
         if _IS_WIN:
-            # Windows: 한글 등 비ASCII 경로는 subprocess가 ffmpeg에 잘못 전달될 수 있음
-            # 파일을 Python이 직접 읽어 stdin으로 피드 (경로 인코딩 완전 우회)
+            # 1단계: stdin 파이프 방식 (경로 인코딩 우회)
             try:
                 with open(filepath, 'rb') as _fh:
                     _file_bytes = _fh.read()
                 proc = subprocess.run(cmd_stdin, input=_file_bytes,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                       **_sp_kwargs)
-                # stdin 방식 실패 시 filepath 직접 재시도
                 if proc.returncode != 0 or not proc.stdout:
                     _write_ffmpeg_log(
                         'stdin 실패→filepath 재시도',
                         proc.returncode,
                         proc.stderr.decode('utf-8', errors='replace'))
-                    proc = subprocess.run(cmd_filepath,
-                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                          **_sp_kwargs)
+                    # 2단계: filepath 직접 방식 (stdin=DEVNULL)
+                    proc = _run_ffmpeg_filepath()
             except Exception as _ex:
                 _write_ffmpeg_log('stdin exception', -1, str(_ex))
-                proc = subprocess.run(cmd_filepath,
-                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                      **_sp_kwargs)
+                proc = _run_ffmpeg_filepath()
         else:
             proc = subprocess.run(cmd_filepath,
+                                  stdin=subprocess.DEVNULL,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+        # 파이프 방식 두 번 모두 실패 → 임시 WAV 파일 방식으로 최후 시도
         if proc is None or proc.returncode != 0 or not proc.stdout:
+            _write_ffmpeg_log(
+                '파이프 실패→tmpfile 시도',
+                proc.returncode if proc else -1,
+                proc.stderr.decode('utf-8', errors='replace') if proc else '')
+            _d, _sr, _err = _run_ffmpeg_tmpfile()
+            if _d is not None:
+                print(f"[Audio] tmpfile 방식으로 디코딩 성공: {filepath}")
+                return _d, _sr
+            # 3단계도 실패 → 오류 표시
             rc  = proc.returncode if proc else -1
             err = proc.stderr.decode('utf-8', errors='replace') if proc else ''
-            _write_ffmpeg_log('최종 실패', rc, err)
-            # 오류 메시지에 returncode 포함 (진단 용이)
-            short_err = err[:300].strip() or '(stderr 없음)'
+            _write_ffmpeg_log('최종 실패', rc, f"{err} | tmpfile: {_err}")
+            short_err = (err[:200] + (_err or '')).strip() or '(stderr 없음)'
             raise RuntimeError(f"ffmpeg 디코딩 실패 (rc={rc}): {short_err}")
 
         raw = np.frombuffer(proc.stdout, dtype=np.float64)
