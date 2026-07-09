@@ -686,72 +686,83 @@ class AudioEngine:
     def _load_pcm_via_ffmpeg(self, filepath: str):
         """ffmpeg subprocess로 PCM 디코딩 (APE, WMA, TTA 등 soundfile 미지원 포맷용)"""
         import subprocess, shutil
-        # PyInstaller 번들 내 ffmpeg (macOS: ffmpeg, Windows: ffmpeg.exe)
-        _exe_dir = os.path.dirname(sys.executable)
-        _bundle_ffmpeg_win = os.path.join(_exe_dir, 'ffmpeg.exe')
-        _bundle_ffmpeg_mac = os.path.join(_exe_dir, 'ffmpeg')
+        # PyInstaller 번들 경로:
+        #   PyInstaller 6+ (onedir): sys._MEIPASS = _internal/ 폴더
+        #   PyInstaller < 6 (onedir): 번들 파일이 .exe 옆에 위치
+        _exe_dir  = os.path.dirname(sys.executable)
+        _meipass  = getattr(sys, '_MEIPASS', None)   # 번들 실행 시 설정됨
+
+        _search_dirs = []
+        if _meipass:
+            _search_dirs.append(_meipass)        # PyInstaller 6+: _internal/
+        _search_dirs.append(_exe_dir)            # 구버전 / 개발 환경
+
+        def _find_in_dirs(name):
+            for d in _search_dirs:
+                p = os.path.join(d, name)
+                if os.path.isfile(p):
+                    return p
+            return None
 
         # Windows 추가 탐색 경로
-        _win_paths = []
+        _win_extra = []
         if _IS_WIN:
-            _win_paths = [
+            _win_extra = [
                 r'C:\ProgramData\chocolatey\bin\ffmpeg.exe',
                 r'C:\ffmpeg\bin\ffmpeg.exe',
                 r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
                 r'C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe',
             ]
 
-        ffmpeg_bin = None
-        for candidate in [
-            _bundle_ffmpeg_win,
-            _bundle_ffmpeg_mac,
-            shutil.which('ffmpeg'),
-            '/opt/homebrew/bin/ffmpeg',
-            '/usr/local/bin/ffmpeg',
-            '/usr/bin/ffmpeg',
-            *_win_paths,
-        ]:
-            if candidate and os.path.isfile(candidate):
-                ffmpeg_bin = candidate
-                break
+        ffmpeg_name = 'ffmpeg.exe' if _IS_WIN else 'ffmpeg'
+        ffmpeg_bin = _find_in_dirs(ffmpeg_name)
+        if not ffmpeg_bin:
+            # PATH 및 Windows 추가 경로 탐색
+            for candidate in [shutil.which('ffmpeg'),
+                               '/opt/homebrew/bin/ffmpeg',
+                               '/usr/local/bin/ffmpeg',
+                               '/usr/bin/ffmpeg',
+                               *_win_extra]:
+                if candidate and os.path.isfile(candidate):
+                    ffmpeg_bin = candidate
+                    break
+
         if ffmpeg_bin is None:
             if _IS_WIN:
                 raise RuntimeError("ffmpeg를 찾을 수 없습니다. 설치 파일에 ffmpeg가 포함되지 않았을 수 있습니다.")
             else:
                 raise RuntimeError("ffmpeg를 찾을 수 없습니다. brew install ffmpeg 또는 PATH 확인 필요")
 
-        # ffprobe 탐색 (ffmpeg과 같은 디렉토리 우선)
-        _ffmpeg_dir = os.path.dirname(ffmpeg_bin)
+        # ffprobe 탐색
         _ffprobe_name = 'ffprobe.exe' if _IS_WIN else 'ffprobe'
-        _ffprobe_same_dir = os.path.join(_ffmpeg_dir, _ffprobe_name)
+        ffprobe_bin = _find_in_dirs(_ffprobe_name)
+        if not ffprobe_bin:
+            ffprobe_bin = shutil.which('ffprobe') or os.path.join(os.path.dirname(ffmpeg_bin), _ffprobe_name)
+            if not os.path.isfile(ffprobe_bin or ''):
+                ffprobe_bin = None
 
-        ffprobe_bin = None
-        for candidate in [
-            _ffprobe_same_dir,
-            shutil.which('ffprobe'),
-            '/opt/homebrew/bin/ffprobe',
-            '/usr/local/bin/ffprobe',
-        ]:
-            if candidate and os.path.isfile(candidate):
-                ffprobe_bin = candidate
-                break
-        probe_cmd = [
-            ffprobe_bin, '-v', 'quiet', '-print_format', 'json',
-            '-show_streams', filepath
-        ]
-        try:
-            probe_out = subprocess.check_output(probe_cmd, stderr=subprocess.DEVNULL)
-            import json as _json
-            probe_info = _json.loads(probe_out)
-            audio_stream = next(
-                (s for s in probe_info.get('streams', []) if s.get('codec_type') == 'audio'),
-                None
-            )
-            srate = int(audio_stream['sample_rate']) if audio_stream else 44100
-            channels = int(audio_stream.get('channels', 2))
-        except Exception:
-            srate = 44100
-            channels = 2
+        # subprocess kwargs: Windows에서 콘솔 창 미표시
+        _sp_kwargs = {}
+        if _IS_WIN:
+            _sp_kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+
+        srate, channels = 44100, 2
+        if ffprobe_bin and os.path.isfile(ffprobe_bin):
+            probe_cmd = [ffprobe_bin, '-v', 'quiet', '-print_format', 'json',
+                         '-show_streams', filepath]
+            try:
+                probe_out = subprocess.check_output(probe_cmd, stderr=subprocess.DEVNULL, **_sp_kwargs)
+                import json as _json
+                probe_info = _json.loads(probe_out)
+                audio_stream = next(
+                    (s for s in probe_info.get('streams', []) if s.get('codec_type') == 'audio'),
+                    None
+                )
+                if audio_stream:
+                    srate    = int(audio_stream['sample_rate'])
+                    channels = int(audio_stream.get('channels', 2))
+            except Exception:
+                pass
 
         # ffmpeg로 원본 샘플레이트 그대로 f64le PCM 추출
         cmd = [
@@ -764,9 +775,9 @@ class AudioEngine:
             '-ac', str(channels),
             'pipe:1'
         ]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_sp_kwargs)
         if proc.returncode != 0 or not proc.stdout:
-            err = proc.stderr.decode(errors='replace')[:300]
+            err = proc.stderr.decode('utf-8', errors='replace')[:400]
             raise RuntimeError(f"ffmpeg 디코딩 실패: {err}")
 
         raw = np.frombuffer(proc.stdout, dtype=np.float64)
