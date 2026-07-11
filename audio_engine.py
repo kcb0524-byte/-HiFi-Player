@@ -905,10 +905,30 @@ class AudioEngine:
             try:
                 # float64로 로드 — EQ 연산 정밀도 확보
                 data, srate = sf.read(filepath, dtype='float64', always_2d=True)
-            except Exception as e:
-                # soundfile 실패 시 ffmpeg로 재시도
-                print(f"[Audio] soundfile 실패 ({e}), ffmpeg 폴백 시도...")
-                data, srate = self._load_pcm_via_ffmpeg(filepath)
+            except Exception as e_sf:
+                # ── 2단계: miniaudio 내장 디코더 (subprocess 없음 — AV 차단 우회)
+                # miniaudio는 dr_mp3 / stb_vorbis / dr_flac 내장 → MP3/OGG/FLAC 지원
+                # subprocess를 쓰지 않으므로 Windows 보안 소프트웨어 영향 없음
+                print(f"[Audio] soundfile 실패 ({e_sf}), miniaudio 시도...")
+                _ma_ok = False
+                if MA_AVAILABLE:
+                    try:
+                        _decoded = miniaudio.decode_file(
+                            filepath,
+                            output_format=miniaudio.SampleFormat.FLOAT32,
+                            nchannels=0,   # 0 = 원본 채널 수 유지
+                            sample_rate=0, # 0 = 원본 샘플레이트 유지
+                        )
+                        _raw = np.frombuffer(bytes(_decoded.samples), dtype=np.float32)
+                        data  = _raw.reshape(_decoded.num_frames, _decoded.nchannels).astype(np.float64)
+                        srate = _decoded.sample_rate
+                        _ma_ok = True
+                        print(f"[Audio] miniaudio 디코딩 성공 ({_decoded.sample_rate}Hz, {_decoded.nchannels}ch)")
+                    except Exception as e_ma:
+                        print(f"[Audio] miniaudio 실패 ({e_ma}), ffmpeg 폴백 시도...")
+                if not _ma_ok:
+                    # ── 3단계: ffmpeg subprocess (최후 수단)
+                    data, srate = self._load_pcm_via_ffmpeg(filepath)
         # 피크 레벨 확인 및 정규화
         peak = np.abs(data).max()
         if peak > 1.0:
