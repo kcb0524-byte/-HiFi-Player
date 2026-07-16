@@ -248,31 +248,31 @@ class CDWidget(QWidget):
         p.setPen(QPen(QColor(100, 75, 15), 1))
         p.drawEllipse(QPoint(0, 0), lr, lr)
 
-        # ── 5. 레이블 텍스트 — QPainterPath로 벡터 렌더링 ──────────
-        # drawText() 대신 addText()→fillPath() 사용:
-        # GDI 폰트 렌더러를 우회해 Windows 회전 좌표계에서도 글리치 없음
-        hole_r = int(r * 0.055)
+        # ── 5. 레이블 텍스트 — LP와 함께 회전 ──────────────────
+        # 상단: ZUNAS, 하단: Player  (구멍 위/아래로 충분히 분리)
         fnt_top = QFont('Arial', max(5, int(lr * 0.30)), QFont.Bold)
         fnt_sub = QFont('Arial', max(4, int(lr * 0.24)))
-        fm_top  = QFontMetrics(fnt_top)
-        fm_sub  = QFontMetrics(fnt_sub)
+        fm_top = QFontMetrics(fnt_top)
+        fm_sub = QFontMetrics(fnt_sub)
+        hole_r = int(r * 0.055)  # 구멍 반지름 (6번 단계와 동일 비율)
 
-        # "ZUNAS" — 구멍 위쪽
-        tw  = fm_top.horizontalAdvance("ZUNAS")
-        y_top = -hole_r - 4 - fm_top.descent()
-        path_top = QPainterPath()
-        path_top.addText(-tw / 2, y_top, fnt_top, "ZUNAS")
-        p.setPen(Qt.NoPen)
-        p.fillPath(path_top, QBrush(QColor(45, 28, 5)))
+        # ZUNAS — 구멍 위쪽, 여유 있게
+        p.setFont(fnt_top)
+        p.setPen(QColor(45, 28, 5))
+        tw = fm_top.horizontalAdvance("ZUNAS")
+        # 텍스트 baseline이 구멍 상단에서 4px 위에 오도록
+        y_top = -(hole_r + 4 + fm_top.descent())
+        p.drawText(int(-tw / 2), y_top, "ZUNAS")
 
-        # "Music" — 구멍 아래쪽
-        tw2 = fm_sub.horizontalAdvance("Music")
+        # Player — 구멍 아래쪽, 여유 있게
+        p.setFont(fnt_sub)
+        p.setPen(QColor(70, 48, 12))
+        tw2 = fm_sub.horizontalAdvance("Player")
         y_bot = hole_r + 4 + fm_sub.ascent()
-        path_bot = QPainterPath()
-        path_bot.addText(-tw2 / 2, y_bot, fnt_sub, "Music")
-        p.fillPath(path_bot, QBrush(QColor(70, 48, 12)))
+        p.drawText(int(-tw2 / 2), y_bot, "Player")
 
         # ── 6. 중앙 스핀들 구멍 ─────────────────────────────────
+        hole_r = int(r * 0.055)
         p.setBrush(QColor(8, 7, 10))
         p.setPen(QPen(QColor(60, 55, 70), 1))
         p.drawEllipse(QPoint(0, 0), hole_r, hole_r)
@@ -302,40 +302,47 @@ class EQGraph(QWidget):
 
     N_BANDS = 8
     BANDS = [
-        ('lowshelf',   32,  0.7),
-        ('peak',      125,  1.0),
-        ('peak',      250,  1.0),
-        ('peak',      500,  1.0),
-        ('peak',     1000,  1.0),
-        ('peak',     2000,  1.0),
-        ('peak',     4000,  1.0),
-        ('highshelf',16000, 0.7),
+        ('lowshelf',    60,  0.7),
+        ('peak',       125,  1.0),
+        ('peak',       250,  1.0),
+        ('peak',       500,  1.0),
+        ('peak',      1000,  1.0),
+        ('peak',      2000,  1.0),
+        ('peak',      4000,  1.0),
+        ('highshelf', 12000, 0.7),
     ]
     BAND_COLORS = [
-        QColor(255, 100,  40),   # 32Hz  — 주황
-        QColor(220, 220,  50),   # 125Hz — 노랑
-        QColor(100, 220,  80),   # 250Hz — 연두
-        QColor( 40, 200, 160),   # 500Hz — 청록
-        QColor( 50, 160, 255),   # 1kHz  — 하늘
-        QColor( 80,  80, 255),   # 2kHz  — 파랑
-        QColor(160,  60, 240),   # 4kHz  — 보라
-        QColor(255, 120, 100),   # 16kHz — 살구
+        QColor(255, 140,  60),
+        QColor(255, 210,  50),
+        QColor(100, 220,  80),
+        QColor( 50, 200, 180),
+        QColor( 60, 140, 255),
+        QColor(120,  80, 255),
+        QColor(200,  60, 220),
+        QColor(240,  80, 120),
     ]
     ML, MT, MR, MB = 34, 12, 8, 24   # margins
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._gains      = [0.0] * self.N_BANDS
-        self._qs         = [b[2] for b in self.BANDS]
-        self._freqs      = [float(b[1]) for b in self.BANDS]
-        self._gain_range = 12.0   # ±6 또는 ±12 선택 가능
-        self._drag_idx   = -1
-        self._hover_idx  = -1
+        self._gains  = [0.0] * self.N_BANDS
+        self._qs     = [b[2] for b in self.BANDS]
+        self._freqs  = [float(b[1]) for b in self.BANDS]
+        self._drag_idx = -1
+        self._hover_idx = -1
         self._drag_start = None
+        self._max_db = 6    # ±6dB 기본값 (±12dB로 전환 가능)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMinimumHeight(160)
         self.setMinimumWidth(300)
+
+    def set_db_range(self, max_db: int):
+        """±6dB / ±12dB 범위 전환. 범위를 벗어난 게인은 클램프."""
+        self._max_db = max_db
+        self._gains = [max(-float(max_db), min(float(max_db), g)) for g in self._gains]
+        self.update()
+        self.params_changed.emit(self.get_params())
 
     # ── 좌표 변환 ──────────────────────────────────────────
     def _fx(self, freq):
@@ -351,14 +358,13 @@ class EQGraph(QWidget):
         return 20.0 * (10 ** (t * math.log10(1000)))
 
     def _gy(self, gain):
-        h  = self.height() - self.MT - self.MB
-        gr = self._gain_range
-        return self.MT + h * (1.0 - (gain + gr) / (gr * 2))
+        h = self.height() - self.MT - self.MB
+        return self.MT + h * (1.0 - (gain + self._max_db) / (2 * self._max_db))
 
     def _yg(self, y):
-        h  = self.height() - self.MT - self.MB
-        gr = self._gain_range
-        return max(-gr, min(gr, (1.0 - (y - self.MT) / h) * (gr * 2) - gr))
+        h = self.height() - self.MT - self.MB
+        return max(-float(self._max_db), min(float(self._max_db),
+                   (1.0 - (y - self.MT) / h) * (2 * self._max_db) - self._max_db))
 
     # ── 필터 응답 계산 ──────────────────────────────────────
     @staticmethod
@@ -412,11 +418,12 @@ class EQGraph(QWidget):
         p.fillRect(0, 0, w, h, QColor(10, 10, 18))
         p.fillRect(self.ML, self.MT, gw, gh, QColor(14, 14, 24))
 
-        # dB 그리드 (gain_range에 따라 라벨 변경)
-        gr = self._gain_range
-        step = 3 if gr >= 12 else 2
-        grid_dbs = list(range(int(-gr), int(gr) + 1, step))
+        # dB 그리드 (±6 또는 ±12 범위에 맞게)
         p.setFont(QFont('Arial', 7))
+        if self._max_db <= 6:
+            grid_dbs = [-6, -3, 0, 3, 6]
+        else:
+            grid_dbs = [-12, -9, -6, -3, 0, 3, 6, 9, 12]
         for db in grid_dbs:
             y = int(self._gy(db))
             is_zero = (db == 0)
@@ -529,8 +536,7 @@ class EQGraph(QWidget):
             sx, sy, sg, sf = self._drag_start
             dy = e.y() - sy
             gain = sg - dy * 0.14
-            gr   = self._gain_range
-            gain = max(-gr, min(gr, round(gain * 2) / 2))
+            gain = max(-12.0, min(12.0, round(gain * 2) / 2))
             self._gains[self._drag_idx] = gain
             if self.BANDS[self._drag_idx][0] == 'peak':
                 import math
@@ -597,17 +603,6 @@ class EQGraph(QWidget):
             self._gains[i] = float(gain)
             self._qs[i]    = float(q)
         self.update()
-
-    def set_gain_range(self, gain_range: float):
-        """±6 또는 ±12 범위 전환. 현재 게인을 새 범위로 클램프."""
-        self._gain_range = float(gain_range)
-        for i in range(self.N_BANDS):
-            self._gains[i] = max(-gain_range, min(gain_range, self._gains[i]))
-        self.update()
-        self._notify()
-
-    def get_gain_range(self) -> float:
-        return self._gain_range
 
 
 # ─────────────────────────────────────────────────────────────
@@ -823,31 +818,35 @@ class EQPanel(QWidget):
             "border:2px solid #2060d0;}")
         self.btn_onoff.clicked.connect(self._on_toggle)
 
-        # ±6dB / ±12dB 범위 선택 버튼
-        _rng_style = (
-            "QPushButton{background:#10101e;color:#505070;border:1px solid #202030;"
-            "border-radius:4px;font-size:11px;font-weight:bold;padding:2px 7px;}"
-            "QPushButton:checked{background:#1a1020;color:#d080ff;"
-            "border:2px solid #8040c0;}"
-            "QPushButton:hover{color:#9090d0;}")
-        self.btn_rng6  = QPushButton("±6dB")
-        self.btn_rng12 = QPushButton("±12dB")
-        for b in (self.btn_rng6, self.btn_rng12):
-            b.setCheckable(True)
-            b.setFixedHeight(26)
-            b.setStyleSheet(_rng_style)
-        self.btn_rng12.setChecked(True)   # 기본값 ±12dB
-        self.btn_rng6.clicked.connect(lambda: self._set_range(6))
-        self.btn_rng12.clicked.connect(lambda: self._set_range(12))
-
-        hint = QLabel("드래그: gain/freq")
+        hint = QLabel("드래그: gain/freq  •  휠: Q (대역폭)")
         hint.setStyleSheet("color:#9090c0;font-size:12px;")
 
+        # ±6dB / ±12dB 범위 전환 버튼
+        _range_ss = (
+            "QPushButton{background:#10101e;color:#505070;border:1px solid #202030;"
+            "border-radius:4px;font-size:12px;font-weight:bold;padding:0 6px;}"
+            "QPushButton:checked{background:#1a1030;color:#c060ff;"
+            "border:2px solid #8030cc;}"
+        )
+        self.btn_range6 = QPushButton("±6dB")
+        self.btn_range6.setCheckable(True)
+        self.btn_range6.setFixedHeight(26)
+        self.btn_range6.setMinimumWidth(54)
+        self.btn_range6.setStyleSheet(_range_ss)
+        self.btn_range6.setChecked(True)    # 기본값 ±6dB
+        self.btn_range6.clicked.connect(lambda: self._on_range_toggle(6))
+
+        self.btn_range12 = QPushButton("±12dB")
+        self.btn_range12.setCheckable(True)
+        self.btn_range12.setFixedHeight(26)
+        self.btn_range12.setMinimumWidth(60)
+        self.btn_range12.setStyleSheet(_range_ss)
+        self.btn_range12.clicked.connect(lambda: self._on_range_toggle(12))
+
         hdr.addWidget(self.btn_onoff)
-        hdr.addSpacing(8)
-        hdr.addWidget(self.btn_rng6)
-        hdr.addWidget(self.btn_rng12)
         hdr.addWidget(hint, 1)
+        hdr.addWidget(self.btn_range6)
+        hdr.addWidget(self.btn_range12)
         root.addLayout(hdr)
 
         # EQ 그래프
@@ -868,12 +867,14 @@ class EQPanel(QWidget):
         self.btn_onoff.setText("EQ ON" if self._enabled else "EQ OFF")
         self.enabled_changed.emit(self._enabled)
 
-    def _set_range(self, r: int):
-        """±6 또는 ±12 범위 전환"""
-        self.btn_rng6.setChecked(r == 6)
-        self.btn_rng12.setChecked(r == 12)
-        self.graph.set_gain_range(r)
-        self.params_changed.emit(self.graph.get_params())
+    def _on_range_toggle(self, db: int):
+        """±6dB / ±12dB 범위 전환 — 두 버튼을 라디오처럼 동작시킴."""
+        self.btn_range6.setChecked(db == 6)
+        self.btn_range12.setChecked(db == 12)
+        self.graph.set_db_range(db)
+
+    def get_db_range(self) -> int:
+        return self.graph._max_db
 
     def _on_reset(self):
         self.graph.reset()
@@ -1504,48 +1505,17 @@ class TrackItem:
         """빠른 메타데이터 로드 (재생 없이)"""
         name = Path(self.filepath).stem
         self.title = name
-        ext = Path(self.filepath).suffix.lower()
         try:
-            if ext == '.dsf':
-                # mutagen DSF: ID3 태그 + info.length (sample_count / sample_rate)
-                from mutagen.dsf import DSF as _DSF
-                tags = _DSF(self.filepath)
-                self.duration = tags.info.length
-                if tags.tags:
-                    t = tags.tags.get('TIT2')
-                    a = tags.tags.get('TPE1')
-                    al = tags.tags.get('TALB')
-                    if t:  self.title  = str(t)  or name
-                    if a:  self.artist = str(a)
-                    if al: self.album  = str(al)
-            elif ext == '.dff':
-                # mutagen DSDIFF: info.length 로 duration 읽기
-                from mutagen.dsdiff import DSDIFF as _DSDIFF
-                tags = _DSDIFF(self.filepath)
-                self.duration = tags.info.length
-            else:
-                from mutagen import File as MutagenFile
-                tags = MutagenFile(self.filepath, easy=True)
-                if tags:
-                    self.title  = str(tags.get('title',  [name])[0]) or name
-                    self.artist = str(tags.get('artist', [''])[0])
-                    self.album  = str(tags.get('album',  [''])[0])
-                    if hasattr(tags, 'info') and hasattr(tags.info, 'length'):
-                        self.duration = tags.info.length
+            from mutagen import File as MutagenFile
+            tags = MutagenFile(self.filepath, easy=True)
+            if tags:
+                self.title  = str(tags.get('title',  [name])[0]) or name
+                self.artist = str(tags.get('artist', [''])[0])
+                self.album  = str(tags.get('album',  [''])[0])
+                if hasattr(tags, 'info') and hasattr(tags.info, 'length'):
+                    self.duration = tags.info.length
         except Exception:
             pass
-        # WAV 전용 폴백: mutagen이 duration을 못 읽으면 내장 wave 모듈 사용
-        # (Windows에서 일부 WAV 파일 또는 경로 인코딩 문제로 mutagen 실패 시)
-        if ext == '.wav' and self.duration <= 0:
-            try:
-                import wave as _wave
-                with _wave.open(self.filepath, 'rb') as wf:
-                    frames = wf.getnframes()
-                    rate   = wf.getframerate()
-                    if rate > 0:
-                        self.duration = frames / rate
-            except Exception:
-                pass
 
     def display_text(self) -> str:
         if self.artist:
@@ -1702,42 +1672,37 @@ class PlaylistDelegate(QStyledItemDelegate):
     PAD_H       = _PL_PAD_H
     PLAYING_ROW = -1      # 현재 재생 중인 row (외부에서 설정)
 
+    SEP_ROLE = Qt.UserRole + 2   # PlaylistWidget.SEP_ROLE 과 동일
+
     def sizeHint(self, option, index):
-        if index.data(Qt.UserRole) == 'separator':
-            return QSize(max(option.rect.width(), 100), 26)
         return QSize(max(option.rect.width(), 100), self.ROW_H)
 
     def paint(self, painter, option, index):
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # ── 폴더 구분선 ────────────────────────────────────────
-        if index.data(Qt.UserRole) == 'separator':
-            rect = option.rect
-            folder_name = index.data(Qt.DisplayRole) or ''
-            # 배경
+        rect = option.rect
+
+        # ── 폴더 구분선 렌더링 ──────────────────────────────
+        if index.data(self.SEP_ROLE) == "__sep__":
+            folder_name = index.data(Qt.UserRole) or ""
             painter.fillRect(rect, QColor(DARK['bg']))
-            # 가로선
-            line_y = rect.top() + rect.height() // 2
+            # 수평선
+            cy = rect.top() + rect.height() // 2
             painter.setPen(QPen(QColor(DARK['border']), 1))
-            painter.drawLine(rect.left() + 8, line_y,
-                             rect.left() + 18, line_y)
-            # 폴더 이름
-            font = QFont('SF Pro Display', 9)
-            font.setWeight(QFont.Medium)
-            painter.setFont(font)
-            painter.setPen(QColor(DARK['text_dim']))
+            painter.drawLine(rect.left() + 8, cy, rect.right() - 8, cy)
+            # 폴더명 배경 (선 위에 겹쳐서 깔끔하게)
+            f = QFont('Arial', 10, QFont.Bold)
+            painter.setFont(f)
             fm = painter.fontMetrics()
-            text_x = rect.left() + 24
-            text_w = rect.width() - 32
-            text = fm.elidedText(folder_name, Qt.ElideMiddle, text_w)
-            painter.drawText(text_x, rect.top(),
-                             text_w, rect.height(),
-                             Qt.AlignLeft | Qt.AlignVCenter, text)
-            # 오른쪽 선
-            text_end = text_x + fm.horizontalAdvance(text) + 8
-            if text_end < rect.right() - 8:
-                painter.drawLine(text_end, line_y, rect.right() - 8, line_y)
+            lbl = f"  {folder_name}  "
+            tw  = fm.horizontalAdvance(lbl)
+            tx  = rect.left() + 14
+            ty  = rect.top()
+            bg_rect = QRect(tx, ty + 2, tw, rect.height() - 4)
+            painter.fillRect(bg_rect, QColor(DARK['bg']))
+            painter.setPen(QColor(DARK['text_dim']))
+            painter.drawText(bg_rect, Qt.AlignVCenter | Qt.AlignLeft, lbl)
             painter.restore()
             return
 
@@ -1748,7 +1713,6 @@ class PlaylistDelegate(QStyledItemDelegate):
         is_hover    = bool(option.state & QStyle.State_MouseOver)
         is_missing  = track is not None and not os.path.exists(track.filepath)
 
-        rect = option.rect
         rw   = rect.width()
 
         # ── 배경 ────────────────────────────────────────────
@@ -1883,32 +1847,45 @@ class PlaylistDelegate(QStyledItemDelegate):
 # 드래그앤드롭 지원 플레이리스트 위젯
 # ─────────────────────────────────────────────────────────────
 class PlaylistWidget(QListWidget):
-    files_dropped = pyqtSignal(list)           # 개별 파일 드롭 (구분선 없음)
-    folder_dropped = pyqtSignal(str, list)     # (폴더명, 파일목록) — 구분선 포함
-    remove_requested = pyqtSignal(int)         # row 번호
-    clear_requested = pyqtSignal()
-    row_moved = pyqtSignal(int, int)           # from_row, to_row
+    files_dropped    = pyqtSignal(list)
+    folder_dropped   = pyqtSignal(str, list)   # (folder_name, paths)
+    remove_requested = pyqtSignal(int)          # row 번호
+    clear_requested  = pyqtSignal()
+
+    SEP_ROLE   = Qt.UserRole + 2   # "__sep__" 마커
+    SCROLL_ZONE  = 44   # px — 이 범위 안에서 자동 스크롤
+    SCROLL_SPEED = 14   # px / tick
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
-        self.setDragDropMode(QAbstractItemView.DragDrop)  # 외부 파일 드롭 허용
+        self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)  # 픽셀 단위 스크롤 (Windows 자동스크롤 필수)
-        self.setAutoScroll(True)
-        self.setAutoScrollMargin(40)
-        self._drop_hint_widget = None  # 오버레이 참조
-        # 커스텀 델리게이트 적용
+        self._drop_hint_widget = None
         self._delegate = PlaylistDelegate(self)
         self.setItemDelegate(self._delegate)
-        self.setMouseTracking(True)  # 호버 State_MouseOver 활성화
+        self.setMouseTracking(True)
         self.setUniformItemSizes(True)
+
+        # ── 드래그 자동 스크롤 ─────────────────────────
+        self._scroll_dir   = 0
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setInterval(20)
+        self._scroll_timer.timeout.connect(self._do_auto_scroll)
+
+    def _do_auto_scroll(self):
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.value() + self._scroll_dir * self.SCROLL_SPEED)
+
+    def _stop_scroll(self):
+        self._scroll_timer.stop()
+        self._scroll_dir = 0
 
     def set_playing_row(self, row: int):
         """현재 재생 중인 행 번호를 델리게이트에 전달하고 전체 갱신."""
@@ -1931,30 +1908,34 @@ class PlaylistWidget(QListWidget):
             event.acceptProposedAction()
         else:
             super().dragMoveEvent(event)
-            # Windows에서 setAutoScroll 타이머가 OLE DnD 루프에 막힐 수 있어
-            # QCursor로 실제 마우스 위치를 직접 읽어 강제 스크롤
-            from PyQt5.QtGui import QCursor
-            vp = self.viewport()
-            pos_y = vp.mapFromGlobal(QCursor.pos()).y()
-            margin = 40
-            vbar = self.verticalScrollBar()
-            if pos_y < margin:
-                speed = max(4, int((margin - pos_y) * 0.6))
-                vbar.setValue(vbar.value() - speed)
-            elif pos_y > vp.height() - margin:
-                speed = max(4, int((pos_y - (vp.height() - margin)) * 0.6))
-                vbar.setValue(vbar.value() + speed)
+        # ── 자동 스크롤 ──────────────────────────────
+        y = event.pos().y()
+        h = self.viewport().height()
+        if y < self.SCROLL_ZONE:
+            self._scroll_dir = -1
+            if not self._scroll_timer.isActive():
+                self._scroll_timer.start()
+        elif y > h - self.SCROLL_ZONE:
+            self._scroll_dir = 1
+            if not self._scroll_timer.isActive():
+                self._scroll_timer.start()
+        else:
+            self._stop_scroll()
+
+    def dragLeaveEvent(self, event):
+        self._stop_scroll()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent):
+        self._stop_scroll()
         if event.mimeData().hasUrls():
-            # 외부 드롭: 폴더와 개별 파일을 분리 처리
-            loose_files = []   # 폴더 없이 직접 드롭된 파일들
+            loose_files = []
             for url in event.mimeData().urls():
                 path = url.toLocalFile()
                 if os.path.isdir(path):
+                    # 폴더는 folder_dropped 시그널로 별도 전달 (구분선 삽입용)
                     folder_files = self._collect_from_dir(path)
                     if folder_files:
-                        # 폴더 단위로 별도 시그널 → player_window에서 구분선 삽입
                         self.folder_dropped.emit(os.path.basename(path), folder_files)
                 elif self._is_audio(path):
                     loose_files.append(path)
@@ -1962,37 +1943,7 @@ class PlaylistWidget(QListWidget):
                 self.files_dropped.emit(loose_files)
             event.acceptProposedAction()
         else:
-            # 내부 드래그 — Copy 대신 Move로 처리
-            source_row = self.currentRow()
-            if source_row < 0:
-                event.ignore()
-                return
-            # 구분선(separator)은 드래그 불가
-            if self.item(source_row) and \
-               self.item(source_row).data(Qt.UserRole) == 'separator':
-                event.ignore()
-                return
-
-            target_item = self.itemAt(event.pos())
-            if target_item is not None:
-                target_row = self.row(target_item)
-                # 구분선 위로 드롭 시 그 아래로 이동
-                if target_item.data(Qt.UserRole) == 'separator':
-                    target_row += 1
-            else:
-                target_row = self.count()
-
-            if source_row == target_row:
-                event.ignore()
-                return
-
-            # 아이템과 데이터 보존하여 이동
-            item = self.takeItem(source_row)
-            insert_row = target_row if target_row < source_row else target_row - 1
-            self.insertItem(insert_row, item)
-            self.setCurrentRow(insert_row)
-            self.row_moved.emit(source_row, insert_row)
-            event.acceptProposedAction()
+            super().dropEvent(event)
 
     def _collect_from_dir(self, dirpath: str) -> list:
         """폴더에서 지원 오디오 파일 재귀 수집 (macOS 숨김 파일 제외)"""
@@ -2027,7 +1978,7 @@ class PlaylistWidget(QListWidget):
             QMenu::item:selected {{ background-color: {DARK['btn_active']}; }}
         """)
         item = self.itemAt(pos)
-        if item:
+        if item and item.data(self.SEP_ROLE) != "__sep__":
             row = self.row(item)
             remove_act = QAction("이 트랙 제거", self)
             remove_act.triggered.connect(lambda: self.remove_requested.emit(row))

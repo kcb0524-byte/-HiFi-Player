@@ -181,60 +181,6 @@ def _ca_get_device_id_by_name(name: str) -> int:
     return 0
 
 
-def _ca_get_device_uid(device_id: int) -> str:
-    """CoreAudio 장치 UID 문자열 반환.
-    miniaudio ma_device_id.coreaudio[256] 에 사용하는 null-terminated string.
-    예: 'AppleUSBAudio:1,4,0,0:0:{UID-String}'
-    """
-    if not _CA_AVAILABLE or device_id == 0:
-        return ''
-    try:
-        kAudioDevicePropertyDeviceUID = struct.unpack('>I', b'uid ')[0]
-        prop = _AudioObjectPropertyAddress(
-            mSelector=kAudioDevicePropertyDeviceUID,
-            mScope=_kAudioObjectPropertyScopeGlobal,
-            mElement=_kAudioObjectPropertyElementMain,
-        )
-        _cf.CFStringGetCString.restype  = ctypes.c_bool
-        _cf.CFStringGetCString.argtypes = [
-            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
-        cf_str = ctypes.c_void_p(0)
-        data_size = ctypes.c_uint32(ctypes.sizeof(cf_str))
-        ret = _ca.AudioObjectGetPropertyData(
-            device_id, ctypes.byref(prop),
-            0, None, ctypes.byref(data_size), ctypes.byref(cf_str))
-        if ret == 0 and cf_str.value:
-            buf = ctypes.create_string_buffer(512)
-            ok  = _cf.CFStringGetCString(cf_str.value, buf, 512, 0x08000100)  # UTF-8
-            _cf.CFRelease(cf_str.value)
-            if ok:
-                uid = buf.value.decode('utf-8', errors='replace')
-                print(f'[CoreAudio] 장치 UID: "{uid}"')
-                return uid
-    except Exception as e:
-        print(f'[CoreAudio] UID 조회 실패: {e}')
-    return ''
-
-
-def _ca_make_miniaudio_device_id(device_name: str):
-    """장치 이름 → miniaudio PlaybackDevice(device_id=...) 에 넘길 bytes 생성.
-    miniaudio CoreAudio 백엔드의 ma_device_id.coreaudio[256] = UID 문자열(null-padded).
-    반환: 256-byte bytes 또는 None (기본 장치 사용)
-    """
-    ca_id = _ca_get_device_id_by_name(device_name)
-    if ca_id == 0:
-        print(f'[CoreAudio] 장치 "{device_name}" 를 찾을 수 없음 — 기본 장치 사용')
-        return None
-    uid = _ca_get_device_uid(ca_id)
-    if not uid:
-        print(f'[CoreAudio] UID 없음 — 기본 장치 사용')
-        return None
-    uid_bytes = uid.encode('utf-8')[:255]
-    result = uid_bytes + b'\x00' * (256 - len(uid_bytes))
-    print(f'[CoreAudio→miniaudio] "{device_name}" → 256bytes device_id 생성 완료')
-    return result
-
-
 def _ca_hog_device(device_id: int) -> int:
     """CoreAudio 독점 모드 획득. 반환값: 이전 hog PID (-1=없음, 성공시 현재 PID)"""
     if not _CA_AVAILABLE or device_id == 0:
@@ -332,28 +278,6 @@ def _ca_set_buffer_size(device_id: int, frames: int) -> bool:
     return False
 
 
-def _ma_get_device_id_by_name(name: str):
-    """miniaudio 장치 목록에서 이름으로 device_id 반환 (레거시 — macOS는 _ca_make_miniaudio_device_id 사용)"""
-    if not MA_AVAILABLE or not name:
-        return None
-    try:
-        devices = miniaudio.Devices()
-        for dev in devices.get_playbacks():
-            # dict 또는 object 모두 지원
-            if isinstance(dev, dict):
-                dev_name = dev.get('name', '') or ''
-                dev_id   = dev.get('id')
-            else:
-                dev_name = getattr(dev, 'name', '') or ''
-                dev_id   = getattr(dev, 'id', None)
-            if dev_name and (name.lower() in dev_name.lower() or dev_name.lower() in name.lower()):
-                print(f'[miniaudio] 장치 매칭: "{dev_name}"')
-                return dev_id
-    except Exception as e:
-        print(f'[miniaudio] 장치 검색 실패: {e}')
-    return None
-
-
 # ─────────────────────────────────────────────
 # DoP (DSD over PCM) 유틸리티
 # ─────────────────────────────────────────────
@@ -425,10 +349,9 @@ class AudioEngine:
         self._dsd_position: int = 0      # DSD 재생 위치 (샘플)
         self._total_samples: int = 0
         self._volume: float = 1.0
-        self._rg_gain: float = 1.0        # ReplayGain 보정값 (선형 배율)
+        self._rg_gain: float = 1.0   # ReplayGain 보정값 (선형 배율)
         self._rg_enabled: bool = True
-        self._rg_mode: str = 'track'      # 'track' or 'album'
-        self._rg_target_lufs: float = -18.0  # 타겟 음량 (-18 ~ -10 LUFS)
+        self._rg_target: float = -18.0  # RG 목표 라우드니스 (dB LUFS, -18 ~ -10)
         self._device_index: Optional[int] = None
 
         # ── HiFi 출력 품질 옵션 ──
@@ -445,7 +368,6 @@ class AudioEngine:
         self._ca_device_id: int = 0          # macOS CoreAudio 장치 ID
         self._ca_hogged: bool = False        # CoreAudio 독점 중 여부
         self._selected_device_name: str = '' # 선택된 장치 이름 (CoreAudio ID 매핑용)
-        self._ma_device_id = None            # miniaudio cdata device_id (macOS 직접 전달용)
 
         # 재생 상태 — generator가 읽는 플래그
         self._state: str = 'idle'        # 'idle' | 'playing' | 'paused'
@@ -488,28 +410,18 @@ class AudioEngine:
         # 각 밴드: (type, freq_hz, gain_db, q)
         self._eq_enabled: bool = False
         self._eq_params: list = [
-            ('lowshelf',   32,  0.0, 0.7),
-            ('peak',      125,  0.0, 1.0),
-            ('peak',      250,  0.0, 1.0),
-            ('peak',      500,  0.0, 1.0),
-            ('peak',     1000,  0.0, 1.0),
-            ('peak',     2000,  0.0, 1.0),
-            ('peak',     4000,  0.0, 1.0),
-            ('highshelf',16000, 0.0, 0.7),
+            ('lowshelf',    60,  0.0, 0.7),
+            ('peak',       125,  0.0, 1.0),
+            ('peak',       250,  0.0, 1.0),
+            ('peak',       500,  0.0, 1.0),
+            ('peak',      1000,  0.0, 1.0),
+            ('peak',      2000,  0.0, 1.0),
+            ('peak',      4000,  0.0, 1.0),
+            ('highshelf', 12000, 0.0, 0.7),
         ]
         # generator 스레드가 읽는 계수 (atomic 교체)
         self._eq_sos: Optional[np.ndarray] = None   # shape (n_bands, 6)
         self._eq_lock = threading.Lock()
-
-        # ── Windows: WASAPI 사전 초기화 ──────────────────────────────────────
-        # 첫 트랙 로드 시 TrackLoader 스레드 안에서 WASAPI 초기화가 일어나는 것을 방지.
-        # 앱 시작 시 미리 장치를 열어두면 _device is not None이 되어,
-        # load() 안에서 _open_device()를 호출하지 않아 terminate() 위험 제거.
-        if _IS_WIN and SD_AVAILABLE:
-            try:
-                self._open_device()
-            except Exception:
-                pass  # 실패해도 무시 — play() 호출 시 재시도
 
     # ─────────────────────────────────────────────
     # 장치 관리
@@ -547,26 +459,14 @@ class AudioEngine:
                 all_devs = miniaudio.Devices()
                 playback = all_devs.get_playbacks()
                 for d in playback:
-                    # dict vs object 모두 지원
-                    if isinstance(d, dict):
-                        dev_id   = d.get('id')
-                        dev_name = d.get('name', '')
-                        max_ch   = d.get('maxChannels', 2)
-                        min_sr   = d.get('minSampleRate', 44100)
-                    else:
-                        dev_id   = getattr(d, 'id', None)
-                        dev_name = getattr(d, 'name', '')
-                        max_ch   = getattr(d, 'maxChannels', 2)
-                        min_sr   = getattr(d, 'minSampleRate', 44100)
-                    print(f'[Device] 발견: "{dev_name}" id={repr(dev_id)} type={type(dev_id).__name__}')
                     dev = AudioDevice(
-                        index=dev_id,
-                        name=dev_name,
-                        max_output_channels=max_ch,
-                        default_samplerate=min_sr,
+                        index=d['id'],
+                        name=d['name'],
+                        max_output_channels=d.get('maxChannels', 2),
+                        default_samplerate=d.get('minSampleRate', 44100),
                         hostapi_name='',
                     )
-                    dev.device_id = dev_id
+                    dev.device_id = d['id']
                     devices.append(dev)
             except Exception as e:
                 print(f'[Device] miniaudio 장치 목록 조회 실패: {e}')
@@ -582,11 +482,10 @@ class AudioEngine:
         )
         return dev
 
-    def set_output_device(self, device_index, device_name: str = '', ma_device_id=None):
+    def set_output_device(self, device_index, device_name: str = ''):
         """출력 장치 변경 — 장치를 바꿔야 하므로 재시작 불가피"""
         self._device_index = device_index
         self._selected_device_name = device_name  # CoreAudio ID 매핑에 사용
-        self._ma_device_id = ma_device_id          # miniaudio cdata (macOS 직접 사용)
         # sample_rate가 0이면 파일이 로드되지 않은 초기 상태 → 장치만 저장하고 열기는 나중에
         if self._sample_rate == 0:
             self._close_device()
@@ -635,7 +534,6 @@ class AudioEngine:
 
         if ext in ('dsf', 'dff'):
             info = self._load_dsd(filepath)
-            # DSD: _decode_stopped는 decode_streaming 내부 스레드가 종료 시 set
         elif ext == 'iso':
             # SACD ISO: track_info가 있으면 해당 트랙, 없으면 첫 번째 트랙
             track_info = getattr(self, '_sacd_track_info', None)
@@ -646,19 +544,11 @@ class AudioEngine:
                 track_info = tracks[0]
             info = self._load_sacd(filepath, track_info)
             self._sacd_track_info = None  # 사용 후 초기화
-            # SACD: _decode_stopped는 decode_streaming 내부 스레드가 종료 시 set
         else:
             info = self._load_pcm(filepath)
-            # PCM: 별도 디코더 스레드 없음 → 즉시 완료 신호
-            # 다음 load() 호출 시 _decode_stopped.wait(2.0)가 즉시 통과하도록
-            self._decode_stopped.set()
 
         # 샘플레이트/채널이 바뀐 경우에만 장치 재시작 (불가피)
-        # ※ _device is None 조건을 의도적으로 제거:
-        #   Windows에서 앱 시작 시 사전 초기화하므로 _device는 항상 not None.
-        #   None인 경우는 play()에서 _open_device()가 처리하므로 여기서 열 필요 없음.
-        #   (TrackLoader 스레드 안에서 WASAPI 초기화 → terminate() 충돌 방지)
-        if self._sample_rate != prev_sr or self._channels != prev_ch:
+        if self._sample_rate != prev_sr or self._channels != prev_ch or self._device is None:
             self._close_device()
             self._open_device()
 
@@ -686,72 +576,68 @@ class AudioEngine:
     def _load_pcm_via_ffmpeg(self, filepath: str):
         """ffmpeg subprocess로 PCM 디코딩 (APE, WMA, TTA 등 soundfile 미지원 포맷용)"""
         import subprocess, shutil
-        # PyInstaller 번들 경로:
-        #   PyInstaller 6+ (onedir): sys._MEIPASS = _internal/ 폴더
-        #   PyInstaller < 6 (onedir): 번들 파일이 .exe 옆에 위치
-        _exe_dir  = os.path.dirname(sys.executable)
-        _meipass  = getattr(sys, '_MEIPASS', None)   # 번들 실행 시 설정됨
-
-        _search_dirs = []
-        if _meipass:
-            _search_dirs.append(_meipass)        # PyInstaller 6+: _internal/
-        _search_dirs.append(_exe_dir)            # 구버전 / 개발 환경
-
-        def _find_in_dirs(name):
-            for d in _search_dirs:
-                p = os.path.join(d, name)
-                if os.path.isfile(p):
-                    return p
-            return None
+        # Windows: 콘솔 창 미표시 플래그
+        _sp_kwargs = {}
+        if _IS_WIN:
+            _sp_kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+        # PyInstaller 번들 내 ffmpeg (macOS: ffmpeg, Windows: ffmpeg.exe)
+        _exe_dir = os.path.dirname(sys.executable)
+        _bundle_ffmpeg_win = os.path.join(_exe_dir, 'ffmpeg.exe')
+        _bundle_ffmpeg_mac = os.path.join(_exe_dir, 'ffmpeg')
 
         # Windows 추가 탐색 경로
-        _win_extra = []
+        _win_paths = []
         if _IS_WIN:
-            _win_extra = [
+            _win_paths = [
                 r'C:\ProgramData\chocolatey\bin\ffmpeg.exe',
                 r'C:\ffmpeg\bin\ffmpeg.exe',
                 r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
                 r'C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe',
             ]
 
-        ffmpeg_name = 'ffmpeg.exe' if _IS_WIN else 'ffmpeg'
-        ffmpeg_bin = _find_in_dirs(ffmpeg_name)
-        if not ffmpeg_bin:
-            # PATH 및 Windows 추가 경로 탐색
-            for candidate in [shutil.which('ffmpeg'),
-                               '/opt/homebrew/bin/ffmpeg',
-                               '/usr/local/bin/ffmpeg',
-                               '/usr/bin/ffmpeg',
-                               *_win_extra]:
-                if candidate and os.path.isfile(candidate):
-                    ffmpeg_bin = candidate
-                    break
-
+        ffmpeg_bin = None
+        for candidate in [
+            _bundle_ffmpeg_win,
+            _bundle_ffmpeg_mac,
+            shutil.which('ffmpeg'),
+            '/opt/homebrew/bin/ffmpeg',
+            '/usr/local/bin/ffmpeg',
+            '/usr/bin/ffmpeg',
+            *_win_paths,
+        ]:
+            if candidate and os.path.isfile(candidate):
+                ffmpeg_bin = candidate
+                break
         if ffmpeg_bin is None:
             if _IS_WIN:
                 raise RuntimeError("ffmpeg를 찾을 수 없습니다. 설치 파일에 ffmpeg가 포함되지 않았을 수 있습니다.")
             else:
                 raise RuntimeError("ffmpeg를 찾을 수 없습니다. brew install ffmpeg 또는 PATH 확인 필요")
 
-        # ffprobe 탐색
+        # ffprobe 탐색 (ffmpeg과 같은 디렉토리 우선)
+        _ffmpeg_dir = os.path.dirname(ffmpeg_bin)
         _ffprobe_name = 'ffprobe.exe' if _IS_WIN else 'ffprobe'
-        ffprobe_bin = _find_in_dirs(_ffprobe_name)
-        if not ffprobe_bin:
-            ffprobe_bin = shutil.which('ffprobe') or os.path.join(os.path.dirname(ffmpeg_bin), _ffprobe_name)
-            if not os.path.isfile(ffprobe_bin or ''):
-                ffprobe_bin = None
+        _ffprobe_same_dir = os.path.join(_ffmpeg_dir, _ffprobe_name)
 
-        # subprocess kwargs: Windows에서 콘솔 창 미표시
-        _sp_kwargs = {}
-        if _IS_WIN:
-            _sp_kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
-
+        ffprobe_bin = None
+        for candidate in [
+            _ffprobe_same_dir,
+            shutil.which('ffprobe'),
+            '/opt/homebrew/bin/ffprobe',
+            '/usr/local/bin/ffprobe',
+        ]:
+            if candidate and os.path.isfile(candidate):
+                ffprobe_bin = candidate
+                break
         srate, channels = 44100, 2
-        if ffprobe_bin and os.path.isfile(ffprobe_bin):
-            probe_cmd = [ffprobe_bin, '-v', 'quiet', '-print_format', 'json',
-                         '-show_streams', filepath]
+        if ffprobe_bin:
+            probe_cmd = [
+                ffprobe_bin, '-v', 'quiet', '-print_format', 'json',
+                '-show_streams', filepath
+            ]
             try:
-                probe_out = subprocess.check_output(probe_cmd, stderr=subprocess.DEVNULL, **_sp_kwargs)
+                probe_out = subprocess.check_output(
+                    probe_cmd, stderr=subprocess.DEVNULL, **_sp_kwargs)
                 import json as _json
                 probe_info = _json.loads(probe_out)
                 audio_stream = next(
@@ -759,127 +645,93 @@ class AudioEngine:
                     None
                 )
                 if audio_stream:
-                    srate    = int(audio_stream['sample_rate'])
-                    channels = int(audio_stream.get('channels', 2))
+                    # 구형 MP3는 sample_rate가 빈 문자열/0으로 올 수 있음 → 방어 처리
+                    try:
+                        _sr = int(audio_stream.get('sample_rate', 0) or 0)
+                        if _sr > 0:
+                            srate = _sr
+                    except (ValueError, TypeError):
+                        pass
+                    try:
+                        _ch = int(audio_stream.get('channels', 0) or 0)
+                        if _ch > 0:
+                            channels = _ch
+                    except (ValueError, TypeError):
+                        pass
             except Exception:
                 pass
 
-        # ffmpeg로 원본 샘플레이트 그대로 f64le PCM 추출
-        # -err_detect ignore_err: 오래된/손상된 파일의 비트스트림 오류 무시
-        # -v error: 에러 메시지는 보이되 progress/info 등 잡음 제거
-        _common_flags = ['-err_detect', 'ignore_err']
-        cmd_filepath = [
-            ffmpeg_bin, '-v', 'error',
-            *_common_flags,
-            '-i', filepath,
-            '-f', 'f64le', '-acodec', 'pcm_f64le',
-            '-ar', str(srate), '-ac', str(channels),
-            'pipe:1'
-        ]
-        cmd_stdin = [
-            ffmpeg_bin, '-v', 'error',
-            *_common_flags,
-            '-i', 'pipe:0',
-            '-f', 'f64le', '-acodec', 'pcm_f64le',
-            '-ar', str(srate), '-ac', str(channels),
-            'pipe:1'
-        ]
-
-        def _write_ffmpeg_log(reason: str, rc: int, stderr_txt: str):
-            """진단용 로그 파일 기록 (앱 설치 폴더에 hifi_error.log 생성)"""
-            try:
-                _log = os.path.join(_exe_dir, 'hifi_error.log')
-                with open(_log, 'a', encoding='utf-8') as _lf:
-                    _lf.write(f"--- ffmpeg 오류 ({reason}) ---\n")
-                    _lf.write(f"filepath : {filepath}\n")
-                    _lf.write(f"returncode: {rc}\n")
-                    _lf.write(f"stderr   : {stderr_txt}\n\n")
-            except Exception:
-                pass
-
-        def _run_ffmpeg_filepath():
-            """filepath 직접 전달 방식 — stdin=DEVNULL로 GUI 앱 stdin 무효화 문제 방지"""
-            return subprocess.run(
-                cmd_filepath,
-                stdin=subprocess.DEVNULL,   # ← 핵심: GUI 앱에서 상속 stdin이 없으므로 명시적 무효화
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                **_sp_kwargs)
-
-        def _run_ffmpeg_tmpfile():
-            """파이프를 전혀 쓰지 않는 최후 수단: ffmpeg → 임시 WAV → soundfile 읽기"""
+        def _run_tmpfile(force_fmt=None):
+            """파이프 실패 시 임시 WAV 파일로 디코딩 (구형 MP3 호환용)
+            -ar/-ac 미지정 → 원본 샘플레이트/채널 그대로 출력, soundfile이 정확히 읽음
+            """
             import tempfile
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as _tmp:
-                _tmp_path = _tmp.name
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as _t:
+                _tmp = _t.name
             try:
-                _cmd_wav = [
+                _fmt_flags = ['-f', force_fmt] if force_fmt else []
+                _cmd = [
                     ffmpeg_bin, '-y', '-v', 'error',
                     '-err_detect', 'ignore_err',
+                    *_fmt_flags,
                     '-i', filepath,
-                    '-ar', str(srate), '-ac', str(channels),
-                    '-f', 'wav', '-acodec', 'pcm_s24le',
-                    _tmp_path
+                    '-f', 'wav', '-acodec', 'pcm_s32le',
+                    _tmp
                 ]
                 _pr = subprocess.run(
-                    _cmd_wav,
+                    _cmd,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     **_sp_kwargs)
-                if _pr.returncode == 0 and os.path.getsize(_tmp_path) > 0:
+                if _pr.returncode == 0 and os.path.getsize(_tmp) > 0:
                     import soundfile as _sf2
-                    _d, _sr = _sf2.read(_tmp_path, dtype='float64', always_2d=True)
-                    return _d, _sr, None   # (data, srate, error)
-                else:
-                    return None, None, _pr.stderr.decode('utf-8', errors='replace')
-            except Exception as _te:
-                return None, None, str(_te)
+                    _d, _sr = _sf2.read(_tmp, dtype='float64', always_2d=True)
+                    return _d, _sr
+                return None, None
+            except Exception:
+                return None, None
             finally:
                 try:
-                    os.unlink(_tmp_path)
+                    os.unlink(_tmp)
                 except Exception:
                     pass
 
-        proc = None
-        if _IS_WIN:
-            # 1단계: stdin 파이프 방식 (경로 인코딩 우회)
-            try:
-                with open(filepath, 'rb') as _fh:
-                    _file_bytes = _fh.read()
-                proc = subprocess.run(cmd_stdin, input=_file_bytes,
-                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                      **_sp_kwargs)
-                if proc.returncode != 0 or not proc.stdout:
-                    _write_ffmpeg_log(
-                        'stdin 실패→filepath 재시도',
-                        proc.returncode,
-                        proc.stderr.decode('utf-8', errors='replace'))
-                    # 2단계: filepath 직접 방식 (stdin=DEVNULL)
-                    proc = _run_ffmpeg_filepath()
-            except Exception as _ex:
-                _write_ffmpeg_log('stdin exception', -1, str(_ex))
-                proc = _run_ffmpeg_filepath()
-        else:
-            proc = subprocess.run(cmd_filepath,
-                                  stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # ffmpeg로 f64le PCM 파이프 출력
+        cmd = [
+            ffmpeg_bin,
+            '-v', 'error',
+            '-err_detect', 'ignore_err',
+            '-i', filepath,
+            '-f', 'f64le',
+            '-acodec', 'pcm_f64le',
+            '-ar', str(srate),
+            '-ac', str(channels),
+            'pipe:1'
+        ]
+        proc = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,   # GUI 앱 stdin 무효화
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_sp_kwargs)
 
-        # 파이프 방식 두 번 모두 실패 → 임시 WAV 파일 방식으로 최후 시도
-        if proc is None or proc.returncode != 0 or not proc.stdout:
-            _write_ffmpeg_log(
-                '파이프 실패→tmpfile 시도',
-                proc.returncode if proc else -1,
-                proc.stderr.decode('utf-8', errors='replace') if proc else '')
-            _d, _sr, _err = _run_ffmpeg_tmpfile()
+        if proc.returncode != 0 or not proc.stdout:
+            # 2단계: tmpfile 방식 (-ar/-ac 없이 원본 포맷 그대로)
+            _d, _sr = _run_tmpfile()
             if _d is not None:
                 print(f"[Audio] tmpfile 방식으로 디코딩 성공: {filepath}")
                 return _d, _sr
-            # 3단계도 실패 → 오류 표시
-            rc  = proc.returncode if proc else -1
-            err = proc.stderr.decode('utf-8', errors='replace') if proc else ''
-            _write_ffmpeg_log('최종 실패', rc, f"{err} | tmpfile: {_err}")
-            short_err = (err[:200] + (_err or '')).strip() or '(stderr 없음)'
-            raise RuntimeError(f"ffmpeg 디코딩 실패 (rc={rc}): {short_err}")
+
+            # 3단계: 구형 MP3 전용 — -f mp3 강제 지정
+            if filepath.lower().endswith('.mp3'):
+                _d, _sr = _run_tmpfile(force_fmt='mp3')
+                if _d is not None:
+                    print(f"[Audio] -f mp3 강제 지정으로 디코딩 성공: {filepath}")
+                    return _d, _sr
+
+            err = proc.stderr.decode(errors='replace')[:300]
+            raise RuntimeError(f"ffmpeg 디코딩 실패: {err}")
 
         raw = np.frombuffer(proc.stdout, dtype=np.float64)
         if len(raw) == 0:
@@ -905,30 +757,10 @@ class AudioEngine:
             try:
                 # float64로 로드 — EQ 연산 정밀도 확보
                 data, srate = sf.read(filepath, dtype='float64', always_2d=True)
-            except Exception as e_sf:
-                # ── 2단계: miniaudio 내장 디코더 (subprocess 없음 — AV 차단 우회)
-                # miniaudio는 dr_mp3 / stb_vorbis / dr_flac 내장 → MP3/OGG/FLAC 지원
-                # subprocess를 쓰지 않으므로 Windows 보안 소프트웨어 영향 없음
-                print(f"[Audio] soundfile 실패 ({e_sf}), miniaudio 시도...")
-                _ma_ok = False
-                if MA_AVAILABLE:
-                    try:
-                        _decoded = miniaudio.decode_file(
-                            filepath,
-                            output_format=miniaudio.SampleFormat.FLOAT32,
-                            nchannels=0,   # 0 = 원본 채널 수 유지
-                            sample_rate=0, # 0 = 원본 샘플레이트 유지
-                        )
-                        _raw = np.frombuffer(bytes(_decoded.samples), dtype=np.float32)
-                        data  = _raw.reshape(_decoded.num_frames, _decoded.nchannels).astype(np.float64)
-                        srate = _decoded.sample_rate
-                        _ma_ok = True
-                        print(f"[Audio] miniaudio 디코딩 성공 ({_decoded.sample_rate}Hz, {_decoded.nchannels}ch)")
-                    except Exception as e_ma:
-                        print(f"[Audio] miniaudio 실패 ({e_ma}), ffmpeg 폴백 시도...")
-                if not _ma_ok:
-                    # ── 3단계: ffmpeg subprocess (최후 수단)
-                    data, srate = self._load_pcm_via_ffmpeg(filepath)
+            except Exception as e:
+                # soundfile 실패 시 ffmpeg로 재시도
+                print(f"[Audio] soundfile 실패 ({e}), ffmpeg 폴백 시도...")
+                data, srate = self._load_pcm_via_ffmpeg(filepath)
         # 피크 레벨 확인 및 정규화
         peak = np.abs(data).max()
         if peak > 1.0:
@@ -965,14 +797,12 @@ class AudioEngine:
         # ReplayGain 게인 결정
         rg_db = info.get('replaygain_db')
         if rg_db is not None:
-            # 태그 있음: RG 태그는 -18 LUFS 기준으로 저장됨
-            # 타겟이 -18이 아닌 경우 오프셋 보정
-            adjusted_db = rg_db + (self._rg_target_lufs - (-18.0))
-            self._rg_gain = float(10.0 ** (adjusted_db / 20.0))
+            # 태그 있음: dB → 선형 변환 (프리앰프 +0 dB)
+            self._rg_gain = float(10.0 ** (rg_db / 20.0))
             info['rg_source'] = f'Tag ({rg_db:+.1f} dB)'
         else:
-            # 태그 없음: RMS 측정으로 자동 계산 (타겟 LUFS 적용)
-            self._rg_gain = self._calc_rg_gain(data, self._rg_target_lufs)
+            # 태그 없음: RMS 측정으로 자동 계산
+            self._rg_gain = self._calc_rg_gain(data, self._rg_target)
             gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
             info['rg_source'] = f'Auto ({gain_db:+.1f} dB)'
 
@@ -990,22 +820,7 @@ class AudioEngine:
         error_box = [None]
         stop_ev = self._decode_stop
 
-        # Windows: WASAPI가 176.4kHz를 지원 안 하는 경우가 많아 192kHz로 리샘플
-        _WIN_DSD_TARGET_SR = 192000 if _IS_WIN else 0
-
         def chunk_cb(pcm, sr, info):
-            nonlocal _WIN_DSD_TARGET_SR
-            # Windows에서 176.4kHz → 192kHz 리샘플링
-            if _IS_WIN and _WIN_DSD_TARGET_SR > 0 and sr != _WIN_DSD_TARGET_SR:
-                try:
-                    from fractions import Fraction
-                    from scipy.signal import resample_poly
-                    f = Fraction(_WIN_DSD_TARGET_SR, sr).limit_denominator(256)
-                    pcm = resample_poly(pcm, f.numerator, f.denominator, axis=0).astype(np.float32)
-                    sr = _WIN_DSD_TARGET_SR
-                except Exception as e:
-                    print(f"[WIN] DSD 리샘플 실패: {e}, 원본 SR 유지")
-                    _WIN_DSD_TARGET_SR = 0
             if info:
                 self._sample_rate = sr
                 self._channels = pcm.shape[1] if pcm.ndim > 1 else 1
@@ -1091,21 +906,7 @@ class AudioEngine:
         error_box = [None]
         stop_ev   = self._decode_stop
 
-        # Windows: WASAPI가 176.4kHz를 지원 안 하는 경우가 많아 192kHz로 리샘플
-        _WIN_DSD_TARGET_SR2 = 192000 if _IS_WIN else 0
-
         def chunk_cb(pcm, sr, info):
-            nonlocal _WIN_DSD_TARGET_SR2
-            if _IS_WIN and _WIN_DSD_TARGET_SR2 > 0 and sr != _WIN_DSD_TARGET_SR2:
-                try:
-                    from fractions import Fraction
-                    from scipy.signal import resample_poly
-                    f = Fraction(_WIN_DSD_TARGET_SR2, sr).limit_denominator(256)
-                    pcm = resample_poly(pcm, f.numerator, f.denominator, axis=0).astype(np.float32)
-                    sr = _WIN_DSD_TARGET_SR2
-                except Exception as e:
-                    print(f"[WIN] SACD 리샘플 실패: {e}, 원본 SR 유지")
-                    _WIN_DSD_TARGET_SR2 = 0
             if info:
                 self._sample_rate   = sr
                 self._channels      = pcm.shape[1] if pcm.ndim > 1 else 1
@@ -1160,13 +961,9 @@ class AudioEngine:
                 meta['genre']       = str(tags.get('genre',       [''])[0])
                 meta['tracknumber'] = str(tags.get('tracknumber', [''])[0])
 
-                # ReplayGain 태그 읽기 (모드에 따라 우선순위 결정)
+                # ReplayGain 태그 읽기 (track gain 우선, 없으면 album gain)
                 rg_db = None
-                if self._rg_mode == 'album':
-                    _rg_keys = ('replaygain_album_gain', 'replaygain_track_gain')
-                else:
-                    _rg_keys = ('replaygain_track_gain', 'replaygain_album_gain')
-                for key in _rg_keys:
+                for key in ('replaygain_track_gain', 'replaygain_album_gain'):
                     val = tags.get(key, [''])[0]
                     if val:
                         try:
@@ -1276,13 +1073,9 @@ class AudioEngine:
     def set_rg_enabled(self, enabled: bool):
         self._rg_enabled = enabled
 
-    def set_rg_mode(self, mode: str):
-        """'track' 또는 'album' 모드 설정. 다음 곡 로드 시 적용됨."""
-        self._rg_mode = mode if mode in ('track', 'album') else 'track'
-
-    def set_rg_target_lufs(self, lufs: float):
-        """RG 타겟 음량 설정 (-18 ~ -10 LUFS). 다음 곡 로드 시 적용됨."""
-        self._rg_target_lufs = max(-18.0, min(-10.0, float(lufs)))
+    def set_rg_target(self, target_db: float):
+        """RG 목표 라우드니스 설정 (-18 ~ -10 dB)"""
+        self._rg_target = float(target_db)
 
     # ─────────────────────────────────────────────
     # 재생 제어
@@ -1440,8 +1233,11 @@ class AudioEngine:
         self._device_samplerate = out_sr
         self._device_channels = out_channels
 
-        # ── macOS: CoreAudio 버퍼 최소화 ────────────────────────────────
+        # ── macOS: CoreAudio 버퍼 최소화만 적용 ──────────────────────
+        # Hog(독점)는 장치 라우팅을 고정시켜 출력 장치 변경을 방해하므로 사용 안 함
+        # miniaudio + REALTIME 스레드 + 50ms 버퍼로 충분한 품질 확보
         if _IS_MAC:
+            # 선택 장치의 CoreAudio ID로 버퍼 크기만 최소화
             ca_dev = 0
             if self._selected_device_name:
                 ca_dev = _ca_get_device_id_by_name(self._selected_device_name)
@@ -1450,41 +1246,29 @@ class AudioEngine:
             if ca_dev:
                 self._ca_device_id = ca_dev
                 _ca_set_buffer_size(ca_dev, 512)
-            self._ca_hogged = False
+            self._ca_hogged = False  # Hog 미사용
 
-        # Windows: sounddevice/WASAPI 인덱스 (정수)
-        # macOS: miniaudio device_id (bytes) — sounddevice 인덱스와 다름
-        sd_device_id = None
+        device_id = None
         if self._device_index is not None:
-            sd_device_id = self._device_index
-
-        ma_device_id = None
-        if _IS_MAC:
-            # 1순위: miniaudio가 열거한 cdata device_id 직접 사용 (이름 변환 없이)
-            if self._ma_device_id is not None:
-                ma_device_id = self._ma_device_id
-                print(f'[Device] macOS cdata device_id 직접 사용 → "{self._selected_device_name}"')
-            # 2순위: CoreAudio UID로 변환 시도 (fallback)
-            elif self._selected_device_name:
-                ma_device_id = _ca_make_miniaudio_device_id(self._selected_device_name)
+            device_id = self._device_index
 
         # ── 시도 순서 결정 ──
         # Windows: sounddevice(PortAudio/WASAPI) → WASAPI Exclusive → miniaudio shared → 기본
-        # macOS  : miniaudio CoreAudio (장치 지정) → miniaudio 기본
+        # macOS  : miniaudio CoreAudio → miniaudio 기본
         open_attempts = []
 
         if _IS_WIN:
-            open_attempts.append(('sounddevice', sd_device_id))
+            open_attempts.append(('sounddevice', device_id))
             if self._exclusive_mode and MA_AVAILABLE:
-                open_attempts.append(('wasapi_exclusive', sd_device_id))
+                open_attempts.append(('wasapi_exclusive', device_id))
             if MA_AVAILABLE:
-                open_attempts.append(('miniaudio_shared', sd_device_id))
-            if sd_device_id is not None and MA_AVAILABLE:
+                open_attempts.append(('miniaudio_shared', device_id))
+            if device_id is not None and MA_AVAILABLE:
                 open_attempts.append(('miniaudio_shared', None))
         else:
             if MA_AVAILABLE:
-                open_attempts.append(('miniaudio_coreaudio', ma_device_id))
-            if MA_AVAILABLE and ma_device_id is not None:
+                open_attempts.append(('miniaudio_coreaudio', device_id))
+            if MA_AVAILABLE and device_id is not None:
                 open_attempts.append(('miniaudio_coreaudio', None))
 
         last_error = None
