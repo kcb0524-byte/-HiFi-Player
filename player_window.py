@@ -1732,10 +1732,14 @@ class HiFiPlayer(QMainWindow):
         self.engine.set_rg_target(float(value))
 
     def _on_rg_mode_changed(self, mode: str):
-        """Track / Album RG 모드 전환."""
+        """Track / Album RG 모드 전환 — 현재 트랙 gain 즉시 갱신."""
         self.btn_rg_track.setChecked(mode == 'track')
         self.btn_rg_album.setChecked(mode == 'album')
-        self.engine.set_rg_mode(mode)
+        rg_src = self.engine.set_rg_mode(mode)
+        if rg_src:
+            self.lbl_rg_info.setText(rg_src)
+            self.lbl_rg_info.setStyleSheet(
+                f"color:{DARK['accent']}; font-size:11px; font-family:monospace;")
 
     def _on_dop_toggled(self, on: bool):
         """DoP (DSD over PCM) 모드 전환"""

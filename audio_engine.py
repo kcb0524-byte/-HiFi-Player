@@ -349,10 +349,16 @@ class AudioEngine:
         self._dsd_position: int = 0      # DSD 재생 위치 (샘플)
         self._total_samples: int = 0
         self._volume: float = 1.0
-        self._rg_gain: float = 1.0   # ReplayGain 보정값 (선형 배율)
+        self._rg_gain: float = 1.0       # ReplayGain 보정값 (선형 배율)
         self._rg_enabled: bool = True
-        self._rg_target: float = -18.0  # RG 목표 라우드니스 (dB LUFS, -18 ~ -10)
-        self._rg_mode: str = 'track'    # 'track' or 'album'
+        self._rg_target: float = -18.0   # RG 목표 라우드니스 (dB LUFS, -18 ~ -10)
+        self._rg_mode: str = 'track'     # 'track' or 'album'
+        self._rg_track_db: Optional[float] = None   # 현재 트랙 gain (dB)
+        self._rg_album_db: Optional[float] = None   # 현재 앨범 gain (dB)
+        self._rg_source: str = ''        # 화면 표시용 문자열
+        self._current_auto_gain: float = 1.0         # 현재 트랙의 RMS Auto 게인 (선형)
+        self._current_folder: str = ''               # 현재 파일 폴더 (Album Auto 캐시 키)
+        self._album_gain_cache: dict = {}            # folder_path → rg_gain (선형), Album Auto용
         self._device_index: Optional[int] = None
 
         # ── HiFi 출력 품질 옵션 ──
@@ -795,19 +801,24 @@ class AudioEngine:
         except Exception:
             pass
 
-        # ReplayGain 게인 결정
-        rg_db = info.get('replaygain_db')
-        if rg_db is not None:
-            # 태그 있음: dB → 선형 변환 (프리앰프 +0 dB)
-            self._rg_gain = float(10.0 ** (rg_db / 20.0))
-            info['rg_source'] = f'Tag ({rg_db:+.1f} dB)'
-        else:
-            # 태그 없음: RMS 측정으로 자동 계산
-            self._rg_gain = self._calc_rg_gain(data, self._rg_target)
-            gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
-            info['rg_source'] = f'Auto ({gain_db:+.1f} dB)'
+        # ReplayGain 게인 결정 — Track/Album 두 값 저장 후 모드에 맞게 적용
+        self._rg_track_db = info.get('rg_track_db')
+        self._rg_album_db = info.get('rg_album_db')
 
-        print(f"[RG] {filepath.split('/')[-1]} → {info['rg_source']} (×{self._rg_gain:.3f})")
+        # 1. 항상 이 트랙의 RMS 기반 Auto 게인 계산 (태그 없을 때 폴백 및 Album Auto 캐시용)
+        auto_gain = self._calc_rg_gain(data, self._rg_target)
+        self._current_auto_gain = auto_gain
+
+        # 2. 현재 폴더 = 앨범 키 (Album Auto 모드에서 폴더별 동일 게인 적용)
+        self._current_folder = os.path.dirname(os.path.abspath(filepath))
+
+        # 3. 폴더의 첫 번째 곡만 캐시 → 이후 동일 폴더 곡은 이 대표값 사용
+        if self._current_folder not in self._album_gain_cache:
+            self._album_gain_cache[self._current_folder] = auto_gain
+
+        # 4. 모드에 맞게 게인 적용 (pre-computed 값 사용 — data 인수 불필요)
+        self._apply_rg_gain()
+        info['rg_source'] = self._rg_source
         return info
 
     def _load_dsd(self, filepath: str) -> dict:
@@ -858,15 +869,15 @@ class AudioEngine:
         # DSD: 스트리밍이라 RMS 측정 불가 → ReplayGain 태그만 읽기
         meta = self._extract_metadata(filepath)
         info.update({k: v for k, v in meta.items() if k not in info})
-        rg_db = meta.get('replaygain_db')
-        if rg_db is not None:
-            self._rg_gain = float(10.0 ** (rg_db / 20.0))
-            info['rg_source'] = f'Tag ({rg_db:+.1f} dB)'
+        self._rg_track_db = meta.get('rg_track_db')
+        self._rg_album_db = meta.get('rg_album_db')
+        if self._rg_track_db is not None or self._rg_album_db is not None:
+            self._apply_rg_gain()
         else:
-            self._rg_gain = 1.0  # DSD 태그 없으면 보정 없음
-            info['rg_source'] = 'No Tag'
-
-        print(f"[RG] {filepath.split('/')[-1]} → DSD {info['rg_source']} (×{self._rg_gain:.3f})")
+            self._rg_gain = 1.0
+            self._rg_source = 'No Tag'
+        info['rg_source'] = self._rg_source
+        print(f"[RG] {filepath.split('/')[-1]} → DSD {self._rg_source} (×{self._rg_gain:.3f})")
         return info
 
     def _load_upnp_stream(self, url: str) -> dict:
@@ -962,39 +973,43 @@ class AudioEngine:
                 meta['genre']       = str(tags.get('genre',       [''])[0])
                 meta['tracknumber'] = str(tags.get('tracknumber', [''])[0])
 
-                # ReplayGain 태그 읽기 — _rg_mode에 따라 우선순위 결정
-                rg_db = None
-                if self._rg_mode == 'album':
-                    rg_keys = ('replaygain_album_gain', 'replaygain_track_gain')
-                else:
-                    rg_keys = ('replaygain_track_gain', 'replaygain_album_gain')
-                for key in rg_keys:
-                    val = tags.get(key, [''])[0]
+                # ReplayGain 태그 읽기 — Track/Album 두 값 모두 저장
+                def _read_rg_key(key_name):
+                    val = tags.get(key_name, [''])[0]
                     if val:
                         try:
-                            rg_db = float(str(val).replace('dB', '').strip())
-                            break
+                            return float(str(val).replace('dB', '').strip())
                         except ValueError:
                             pass
-                # easy=True로 못 읽는 경우 raw 태그에서 재시도
-                if rg_db is None:
+                    return None
+
+                track_db = _read_rg_key('replaygain_track_gain')
+                album_db = _read_rg_key('replaygain_album_gain')
+
+                # easy=True로 못 읽은 경우 raw 태그에서 재시도
+                if track_db is None or album_db is None:
                     try:
                         raw = MutagenFile(filepath, easy=False)
                         if raw and raw.tags:
-                            for key in rg_keys:
-                                for rk in raw.tags.keys():
-                                    if key in rk.lower():
-                                        v = str(raw.tags[rk])
-                                        try:
-                                            rg_db = float(v.replace('dB','').strip())
-                                            break
-                                        except ValueError:
-                                            pass
-                                if rg_db is not None:
-                                    break
+                            for rk in raw.tags.keys():
+                                kl = rk.lower()
+                                v_str = str(raw.tags[rk])
+                                try:
+                                    v = float(v_str.replace('dB', '').strip())
+                                    if track_db is None and 'track_gain' in kl:
+                                        track_db = v
+                                    if album_db is None and 'album_gain' in kl:
+                                        album_db = v
+                                except ValueError:
+                                    pass
                     except Exception:
                         pass
-                meta['replaygain_db'] = rg_db  # None이면 태그 없음
+
+                meta['rg_track_db'] = track_db
+                meta['rg_album_db'] = album_db
+                # 하위 호환용 (mode에 따른 단일 값)
+                meta['replaygain_db'] = (album_db if self._rg_mode == 'album' else track_db) \
+                                        or track_db or album_db
 
                 # 커버아트 추출
                 meta['cover_data'] = AudioEngine._extract_cover(filepath)
@@ -1081,12 +1096,55 @@ class AudioEngine:
         self._rg_enabled = enabled
 
     def set_rg_target(self, target_db: float):
-        """RG 목표 라우드니스 설정 (-18 ~ -10 dB)"""
+        """RG 목표 라우드니스 설정 (-18 ~ -10 dB). 타겟 변경 시 Album Auto 캐시 무효화."""
         self._rg_target = float(target_db)
+        self._album_gain_cache.clear()  # 타겟 바뀌면 기존 Auto 계산값 무효화
 
-    def set_rg_mode(self, mode: str):
-        """RG 모드 설정: 'track' 또는 'album'"""
+    def set_rg_mode(self, mode: str) -> str:
+        """RG 모드 설정: 'track' 또는 'album'. 현재 트랙에 즉시 적용. 표시 문자열 반환."""
         self._rg_mode = mode if mode in ('track', 'album') else 'track'
+        self._apply_rg_gain()
+        return self._rg_source
+
+    def _apply_rg_gain(self, data: 'Optional[np.ndarray]' = None):
+        """저장된 Track/Album dB 값과 현재 모드로 _rg_gain 즉시 갱신.
+        태그 없을 때:
+          Track 모드 → 이 트랙의 개별 RMS Auto 게인 (곡마다 다른 값)
+          Album 모드 → 폴더 첫 곡 RMS를 대표값으로 폴더 내 모든 곡 동일 게인 적용"""
+        if self._rg_mode == 'album':
+            if self._rg_album_db is not None:
+                # Album 태그 있음 → 태그 사용
+                self._rg_gain = float(10.0 ** (self._rg_album_db / 20.0))
+                self._rg_source = f'Album ({self._rg_album_db:+.1f} dB)'
+            else:
+                # Album 태그 없음 → 폴더 기준 Auto (폴더 첫 곡 RMS 대표값)
+                folder_gain = self._album_gain_cache.get(self._current_folder)
+                if folder_gain is not None:
+                    self._rg_gain = folder_gain
+                    gain_db = 20.0 * np.log10(max(folder_gain, 1e-9))
+                    self._rg_source = f'Album Auto ({gain_db:+.1f} dB)'
+                elif data is not None:
+                    # Fallback: 데이터로 직접 계산
+                    self._rg_gain = self._calc_rg_gain(data, self._rg_target)
+                    self._album_gain_cache[self._current_folder] = self._rg_gain
+                    gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
+                    self._rg_source = f'Album Auto ({gain_db:+.1f} dB)'
+                # 캐시도 없고 데이터도 없으면 현재 게인 유지
+        else:  # track mode
+            if self._rg_track_db is not None:
+                # Track 태그 있음 → 태그 사용
+                self._rg_gain = float(10.0 ** (self._rg_track_db / 20.0))
+                self._rg_source = f'Track ({self._rg_track_db:+.1f} dB)'
+            elif self._current_auto_gain > 0:
+                # Track 태그 없음 → 이 트랙의 개별 RMS Auto (곡마다 다른 값)
+                self._rg_gain = self._current_auto_gain
+                gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
+                self._rg_source = f'Track Auto ({gain_db:+.1f} dB)'
+            elif data is not None:
+                self._rg_gain = self._calc_rg_gain(data, self._rg_target)
+                gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
+                self._rg_source = f'Track Auto ({gain_db:+.1f} dB)'
+            # else: 현재 게인 유지
 
     # ─────────────────────────────────────────────
     # 재생 제어
