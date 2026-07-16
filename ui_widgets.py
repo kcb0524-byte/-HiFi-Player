@@ -1709,6 +1709,12 @@ class PlaylistDelegate(QStyledItemDelegate):
         row   = index.row()
         track = index.data(Qt.UserRole + 1)   # TrackItem
         is_playing  = (row == self.PLAYING_ROW)
+        # 구분선을 제외한 실제 트랙 순번
+        model = index.model()
+        track_num = sum(
+            1 for r in range(row + 1)
+            if model.index(r, 0).data(self.SEP_ROLE) != "__sep__"
+        )
         is_selected = bool(option.state & QStyle.State_Selected)
         is_hover    = bool(option.state & QStyle.State_MouseOver)
         is_missing  = track is not None and not os.path.exists(track.filepath)
@@ -1777,7 +1783,7 @@ class PlaylistDelegate(QStyledItemDelegate):
             font_num = QFont('SF Pro Display', 10)
             painter.setFont(font_num)
             painter.drawText(num_rect, Qt.AlignRight | Qt.AlignVCenter,
-                             str(row + 1))
+                             str(track_num))
 
         x += self.NUM_W
 

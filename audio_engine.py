@@ -352,6 +352,7 @@ class AudioEngine:
         self._rg_gain: float = 1.0   # ReplayGain 보정값 (선형 배율)
         self._rg_enabled: bool = True
         self._rg_target: float = -18.0  # RG 목표 라우드니스 (dB LUFS, -18 ~ -10)
+        self._rg_mode: str = 'track'    # 'track' or 'album'
         self._device_index: Optional[int] = None
 
         # ── HiFi 출력 품질 옵션 ──
@@ -961,13 +962,17 @@ class AudioEngine:
                 meta['genre']       = str(tags.get('genre',       [''])[0])
                 meta['tracknumber'] = str(tags.get('tracknumber', [''])[0])
 
-                # ReplayGain 태그 읽기 (track gain 우선, 없으면 album gain)
+                # ReplayGain 태그 읽기 — _rg_mode에 따라 우선순위 결정
                 rg_db = None
-                for key in ('replaygain_track_gain', 'replaygain_album_gain'):
+                if self._rg_mode == 'album':
+                    rg_keys = ('replaygain_album_gain', 'replaygain_track_gain')
+                else:
+                    rg_keys = ('replaygain_track_gain', 'replaygain_album_gain')
+                for key in rg_keys:
                     val = tags.get(key, [''])[0]
                     if val:
                         try:
-                            rg_db = float(str(val).replace('dB', '').replace('dB', '').strip())
+                            rg_db = float(str(val).replace('dB', '').strip())
                             break
                         except ValueError:
                             pass
@@ -976,15 +981,17 @@ class AudioEngine:
                     try:
                         raw = MutagenFile(filepath, easy=False)
                         if raw and raw.tags:
-                            for key in raw.tags.keys():
-                                kl = key.lower()
-                                if 'replaygain_track_gain' in kl or 'replaygain_album_gain' in kl:
-                                    v = str(raw.tags[key])
-                                    try:
-                                        rg_db = float(v.replace('dB','').strip())
-                                        break
-                                    except ValueError:
-                                        pass
+                            for key in rg_keys:
+                                for rk in raw.tags.keys():
+                                    if key in rk.lower():
+                                        v = str(raw.tags[rk])
+                                        try:
+                                            rg_db = float(v.replace('dB','').strip())
+                                            break
+                                        except ValueError:
+                                            pass
+                                if rg_db is not None:
+                                    break
                     except Exception:
                         pass
                 meta['replaygain_db'] = rg_db  # None이면 태그 없음
@@ -1076,6 +1083,10 @@ class AudioEngine:
     def set_rg_target(self, target_db: float):
         """RG 목표 라우드니스 설정 (-18 ~ -10 dB)"""
         self._rg_target = float(target_db)
+
+    def set_rg_mode(self, mode: str):
+        """RG 모드 설정: 'track' 또는 'album'"""
+        self._rg_mode = mode if mode in ('track', 'album') else 'track'
 
     # ─────────────────────────────────────────────
     # 재생 제어

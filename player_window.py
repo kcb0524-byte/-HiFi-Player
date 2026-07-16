@@ -442,9 +442,10 @@ class HiFiPlayer(QMainWindow):
         rg_tgt_lbl.setStyleSheet(f"color:{DARK['text_muted']}; font-size:11px;")
         rg_tgt_lbl.setFixedWidth(38)
         self.slider_rg_target = QSlider(Qt.Horizontal)
-        self.slider_rg_target.setRange(-180, -100)   # ×10 고정소수점 (-18.0 ~ -10.0)
-        self.slider_rg_target.setValue(-180)
-        self.slider_rg_target.setTickInterval(10)
+        self.slider_rg_target.setRange(-18, -10)     # 1 dB 단위 (-18 ~ -10)
+        self.slider_rg_target.setValue(-18)
+        self.slider_rg_target.setTickInterval(1)
+        self.slider_rg_target.setSingleStep(1)
         self.slider_rg_target.setStyleSheet(
             f"QSlider::groove:horizontal{{height:3px;background:{DARK['panel3']};border-radius:2px;}}"
             f"QSlider::handle:horizontal{{width:12px;height:12px;margin:-5px 0;"
@@ -452,13 +453,40 @@ class HiFiPlayer(QMainWindow):
             f"QSlider::sub-page:horizontal{{background:{DARK['accent']};border-radius:2px;}}"
         )
         self.slider_rg_target.valueChanged.connect(self._on_rg_target_changed)
-        self.lbl_rg_target = QLabel("-18.0 dB")
+        self.lbl_rg_target = QLabel("-18 dB")
         self.lbl_rg_target.setStyleSheet(f"color:{DARK['text_dim']}; font-size:11px; font-family:monospace;")
-        self.lbl_rg_target.setFixedWidth(52)
+        self.lbl_rg_target.setFixedWidth(44)
         rg_tgt_row.addWidget(rg_tgt_lbl)
         rg_tgt_row.addWidget(self.slider_rg_target, 1)
         rg_tgt_row.addWidget(self.lbl_rg_target)
         lay.addLayout(rg_tgt_row)
+
+        # Track / Album 모드 선택 버튼
+        rg_mode_row = QHBoxLayout()
+        rg_mode_row.setSpacing(4)
+        rg_mode_lbl = QLabel("Mode")
+        rg_mode_lbl.setStyleSheet(f"color:{DARK['text_muted']}; font-size:11px;")
+        rg_mode_lbl.setFixedWidth(38)
+        btn_style = (
+            f"QPushButton{{background:{DARK['panel3']};color:{DARK['text_dim']};"
+            f"border:1px solid {DARK['border']};border-radius:3px;padding:2px 8px;font-size:11px;}}"
+            f"QPushButton:checked{{background:{DARK['accent']};color:#fff;border-color:{DARK['accent']};}}"
+        )
+        self.btn_rg_track = QPushButton("Track")
+        self.btn_rg_track.setCheckable(True)
+        self.btn_rg_track.setChecked(True)
+        self.btn_rg_track.setStyleSheet(btn_style)
+        self.btn_rg_track.clicked.connect(lambda: self._on_rg_mode_changed('track'))
+        self.btn_rg_album = QPushButton("Album")
+        self.btn_rg_album.setCheckable(True)
+        self.btn_rg_album.setChecked(False)
+        self.btn_rg_album.setStyleSheet(btn_style)
+        self.btn_rg_album.clicked.connect(lambda: self._on_rg_mode_changed('album'))
+        rg_mode_row.addWidget(rg_mode_lbl)
+        rg_mode_row.addWidget(self.btn_rg_track)
+        rg_mode_row.addWidget(self.btn_rg_album)
+        rg_mode_row.addStretch()
+        lay.addLayout(rg_mode_row)
         lay.addSpacing(10)
 
         # ── Output Device ──────────────────────────────────────
@@ -1699,10 +1727,15 @@ class HiFiPlayer(QMainWindow):
         self.engine.set_rg_enabled(on)
 
     def _on_rg_target_changed(self, value: int):
-        """RG target 슬라이더 값 변경 — value = dB×10 (정수)."""
-        db = value / 10.0
-        self.lbl_rg_target.setText(f"{db:.1f} dB")
-        self.engine.set_rg_target(db)
+        """RG target 슬라이더 값 변경 — value = dB 정수 (-18 ~ -10)."""
+        self.lbl_rg_target.setText(f"{value} dB")
+        self.engine.set_rg_target(float(value))
+
+    def _on_rg_mode_changed(self, mode: str):
+        """Track / Album RG 모드 전환."""
+        self.btn_rg_track.setChecked(mode == 'track')
+        self.btn_rg_album.setChecked(mode == 'album')
+        self.engine.set_rg_mode(mode)
 
     def _on_dop_toggled(self, on: bool):
         """DoP (DSD over PCM) 모드 전환"""
@@ -1747,6 +1780,8 @@ class HiFiPlayer(QMainWindow):
         # 비트퍼펙트 ON 시 EQ·RG·디더 컨트롤 비활성화 (시각적 피드백)
         self.eq_panel.setEnabled(not on)
         self.toggle_rg.setEnabled(not on)
+        self.btn_rg_track.setEnabled(not on)
+        self.btn_rg_album.setEnabled(not on)
         self.toggle_dither.setEnabled(not on)
         self.combo_upsample.setEnabled(not on)
         # 볼륨 슬라이더: 비트퍼펙트 ON 시 비활성화 + 툴팁 안내
@@ -1844,8 +1879,11 @@ class HiFiPlayer(QMainWindow):
             self.toggle_rg.setChecked(rg_on)
             self.engine.set_rg_enabled(rg_on)
             # RG target 슬라이더 복원
-            self.slider_rg_target.setValue(int(rg_target * 10))
-            self.engine.set_rg_target(rg_target)
+            self.slider_rg_target.setValue(int(rg_target))
+            self.engine.set_rg_target(float(int(rg_target)))
+            # RG 모드 복원
+            rg_mode = data.get('rg_mode', 'track')
+            self._on_rg_mode_changed(rg_mode)
             # EQ dB 범위 복원
             if eq_range == 6:
                 self.eq_panel._on_range_toggle(6)
@@ -1860,6 +1898,8 @@ class HiFiPlayer(QMainWindow):
             if bp_on:
                 self.eq_panel.setEnabled(False)
                 self.toggle_rg.setEnabled(False)
+                self.btn_rg_track.setEnabled(False)
+                self.btn_rg_album.setEnabled(False)
                 self.toggle_dither.setEnabled(False)
                 self.combo_upsample.setEnabled(False)
             # 출력 장치 복원
@@ -1942,7 +1982,8 @@ class HiFiPlayer(QMainWindow):
                 'dither':         self.toggle_dither.isChecked(),
                 'upsample_idx':   self.combo_upsample.currentIndex(),
                 'rg_enabled':     self.toggle_rg.isChecked(),
-                'rg_target':      self.slider_rg_target.value() / 10.0,
+                'rg_target':      float(self.slider_rg_target.value()),
+                'rg_mode':        'album' if self.btn_rg_album.isChecked() else 'track',
                 'eq_db_range':    self.eq_panel.get_db_range(),
                 'dop_mode':       self.toggle_dop.isChecked(),
                 # 출력 장치

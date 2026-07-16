@@ -205,16 +205,14 @@ echo "▶ Ad-hoc 코드사이닝 (entitlements 포함)..."
 ENTITLEMENTS="$DIR/entitlements.plist"
 if [ -f "$ENTITLEMENTS" ]; then
   codesign --force --deep --sign - \
-    --options runtime \
     --entitlements "$ENTITLEMENTS" \
     "$APP_PATH" 2>/dev/null \
-    && echo "  ✓ ad-hoc 서명 완료 (entitlements + hardened runtime)" \
+    && echo "  ✓ ad-hoc 서명 완료 (entitlements 적용)" \
     || echo "  ⚠ 서명 실패 (무시)"
 else
   codesign --force --deep --sign - \
-    --options runtime \
     "$APP_PATH" 2>/dev/null \
-    && echo "  ✓ ad-hoc 서명 완료 (hardened runtime)" \
+    && echo "  ✓ ad-hoc 서명 완료" \
     || echo "  ⚠ 서명 실패 (무시)"
 fi
 
