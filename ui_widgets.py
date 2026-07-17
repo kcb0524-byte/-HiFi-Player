@@ -13,9 +13,11 @@ DSF/DFF(DSD), FLAC, WAV, AIFF, MP3 등 광범위한 포맷 지원
 
 import sys
 import os
+import re
 import json
 import random
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Optional, List
 
@@ -1852,10 +1854,29 @@ class PlaylistDelegate(QStyledItemDelegate):
 # ─────────────────────────────────────────────────────────────
 # 드래그앤드롭 지원 플레이리스트 위젯
 # ─────────────────────────────────────────────────────────────
+def natural_sort_key(path: str):
+    """파일명 자연 정렬 키 — 숫자를 수치로 비교해 "2. 곡" < "10. 곡" 순서 보장.
+
+    사전순 sorted()는 "10. 곡"을 "2. 곡"보다 앞에 놓아 트랙 순번이
+    뒤죽박죽되는 원인이 됨. 한글 파일명은 NFC 정규화(macOS NFD 대응),
+    대소문자 무시. 숫자 토큰은 (0, 수치), 문자 토큰은 (1, 문자열) 튜플로
+    만들어 타입 혼합 비교 오류 없이 안전하게 정렬한다.
+    """
+    name = unicodedata.normalize('NFC', os.path.basename(path))
+    key = []
+    for tok in re.split(r'(\d+)', name):
+        try:
+            key.append((0, int(tok)))
+        except ValueError:
+            key.append((1, tok.casefold()))
+    return key
+
+
 class PlaylistWidget(QListWidget):
     files_dropped    = pyqtSignal(list)
     folder_dropped   = pyqtSignal(str, list)   # (folder_name, paths)
     remove_requested = pyqtSignal(int)          # row 번호
+    remove_rows_requested = pyqtSignal(list)    # 다중 선택 제거 — row 번호 리스트
     clear_requested  = pyqtSignal()
 
     SEP_ROLE   = Qt.UserRole + 2   # "__sep__" 마커
@@ -1867,7 +1888,8 @@ class PlaylistWidget(QListWidget):
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragDrop)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        # Shift/Ctrl(⌘) 다중 선택 → 여러 곡 한번에 삭제 가능
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -1946,7 +1968,8 @@ class PlaylistWidget(QListWidget):
                 elif self._is_audio(path):
                     loose_files.append(path)
             if loose_files:
-                self.files_dropped.emit(loose_files)
+                # OS가 주는 드롭 순서는 선택 순서라 뒤죽박죽 — 파일명 자연 정렬
+                self.files_dropped.emit(sorted(loose_files, key=natural_sort_key))
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
@@ -1957,8 +1980,9 @@ class PlaylistWidget(QListWidget):
         exts = AudioEngine.SUPPORTED_FORMATS
         for root, dirs, filenames in os.walk(dirpath):
             # 숨김 폴더 제외
-            dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
-            for fname in sorted(filenames):
+            dirs[:] = sorted((d for d in dirs if not d.startswith('.')),
+                             key=natural_sort_key)
+            for fname in sorted(filenames, key=natural_sort_key):
                 # macOS 리소스 포크(._로 시작) 및 숨김 파일 제외
                 if fname.startswith('.') or fname.startswith('._'):
                     continue
@@ -1986,8 +2010,17 @@ class PlaylistWidget(QListWidget):
         item = self.itemAt(pos)
         if item and item.data(self.SEP_ROLE) != "__sep__":
             row = self.row(item)
-            remove_act = QAction("이 트랙 제거", self)
-            remove_act.triggered.connect(lambda: self.remove_requested.emit(row))
+            sel_rows = [self.row(i) for i in self.selectedItems()
+                        if i.data(self.SEP_ROLE) != "__sep__"]
+            if len(sel_rows) > 1 and row in sel_rows:
+                # 다중 선택 위에서 우클릭 → 선택 전체 제거
+                remove_act = QAction(f"선택한 {len(sel_rows)}개 트랙 제거", self)
+                remove_act.triggered.connect(
+                    lambda checked=False, rows=list(sel_rows):
+                        self.remove_rows_requested.emit(rows))
+            else:
+                remove_act = QAction("이 트랙 제거", self)
+                remove_act.triggered.connect(lambda: self.remove_requested.emit(row))
             menu.addAction(remove_act)
         clear_act = QAction("플레이리스트 전체 지우기", self)
         clear_act.triggered.connect(self.clear_requested.emit)

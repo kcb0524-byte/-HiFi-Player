@@ -47,6 +47,7 @@ from ui_widgets import (
     TrackLoader, MarqueeLabel, CDWidget, EQGraph, PresetPanel, EQPanel,
     ToggleSwitch, TransportButton, IconButton, VUMeter,
     TrackItem, PlaylistDelegate, PlaylistHeader, PlaylistWidget,
+    natural_sort_key,
 )
 
 
@@ -688,6 +689,7 @@ class HiFiPlayer(QMainWindow):
         self.playlist.folder_dropped.connect(self._add_folder_with_sep)
         self.playlist.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.playlist.remove_requested.connect(self._remove_track)
+        self.playlist.remove_rows_requested.connect(self._remove_tracks)
         self.playlist.clear_requested.connect(self._clear_playlist)
         # 헤더가 playlist를 직접 참조해 스크롤바 폭 실시간 계산
         self.pl_header.set_playlist(self.playlist)
@@ -927,7 +929,8 @@ class HiFiPlayer(QMainWindow):
             f"오디오 파일 ({exts});;모든 파일 (*.*)"
         )
         if paths:
-            self._add_file_list(paths)
+            # 대화상자 다중 선택 순서는 클릭 순서 — 파일명 자연 정렬로 통일
+            self._add_file_list(sorted(paths, key=natural_sort_key))
 
     def _open_sacd_iso(self):
         """SACD ISO 파일 열기 — 트랙 목록 다이얼로그 표시"""
@@ -1058,8 +1061,9 @@ class HiFiPlayer(QMainWindow):
         if dirpath:
             files = []
             for root, dirs, filenames in os.walk(dirpath):
-                dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
-                for fname in sorted(filenames):
+                dirs[:] = sorted((d for d in dirs if not d.startswith('.')),
+                                 key=natural_sort_key)
+                for fname in sorted(filenames, key=natural_sort_key):
                     if fname.startswith('.') or fname.startswith('._'):
                         continue
                     if Path(fname).suffix.lower() in AudioEngine.SUPPORTED_FORMATS:
@@ -1132,6 +1136,27 @@ class HiFiPlayer(QMainWindow):
             self.current_index = -1
         elif self.current_index > row:
             self.current_index -= 1
+        self.drop_hint.setVisible(self.playlist.count() == 0)
+
+    def _remove_tracks(self, rows: list):
+        """여러 트랙 한번에 제거 (Shift/Ctrl 다중 선택) — current_index 보정"""
+        rows = sorted({r for r in rows
+                       if 0 <= r < self.playlist.count() and not self._is_separator(r)},
+                      reverse=True)
+        if not rows:
+            return
+        was_current = self.current_index in rows
+        cur = self.current_index
+        for r in rows:
+            self.playlist.takeItem(r)
+            if cur > r:
+                cur -= 1
+        if was_current:
+            self.engine.stop()
+            self.current_index = -1
+        else:
+            self.current_index = cur
+        self.playlist.set_playing_row(self.current_index)
         self.drop_hint.setVisible(self.playlist.count() == 0)
 
     def _clear_playlist(self):
@@ -1761,9 +1786,14 @@ class HiFiPlayer(QMainWindow):
                 self.toggle_mini_player()
                 return True
             elif key in (Qt.Key_Delete, Qt.Key_Backspace):
-                row = self.playlist.currentRow()
-                if row >= 0 and not self._is_separator(row):
-                    self._remove_track(row)
+                sel_rows = [self.playlist.row(i) for i in self.playlist.selectedItems()]
+                sel_rows = [r for r in sel_rows if not self._is_separator(r)]
+                if len(sel_rows) > 1:
+                    self._remove_tracks(sel_rows)          # 다중 선택 삭제
+                else:
+                    row = sel_rows[0] if sel_rows else self.playlist.currentRow()
+                    if row >= 0 and not self._is_separator(row):
+                        self._remove_track(row)
                 return True
         return super().eventFilter(obj, event)
 
