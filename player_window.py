@@ -1111,11 +1111,41 @@ class HiFiPlayer(QMainWindow):
         self.drop_hint.setVisible(self.playlist.count() == 0)
 
     def _clear_playlist(self):
-        """플레이리스트 전체 지우기"""
+        """플레이리스트 전체 지우기 + Now Playing 초기화"""
         self.engine.stop()
         self.playlist.clear()
         self.current_index = -1
         self.drop_hint.setVisible(True)
+
+        # ── Now Playing 표시 전부 초기화 ──────────────────────────
+        self.lbl_title.setText("—")
+        self.lbl_artist.setText(" ")
+        self.lbl_album.setText(" ")
+
+        # 커버아트 지우고 LP 애니메이션으로 복귀
+        self.lbl_cover.clear()
+        self.lbl_cover.setStyleSheet("background:#0a0a0f;")
+        self.art_stack.setCurrentIndex(0)
+
+        # 시크바 / 시간 초기화
+        self.seek_slider.setValue(0)
+        self.lbl_pos.setText("0:00")
+        self.lbl_dur.setText("0:00")
+
+        # RG 정보 초기화
+        self.lbl_rg_info.setText("—")
+        self.lbl_rg_info.setStyleSheet(
+            "color:transparent; font-size:11px; font-family:monospace;")
+
+        # 재생 버튼 아이콘 초기화
+        self.btn_play.set_icon("play")
+        self.btn_play.setEnabled(True)
+
+        # 미니 플레이어 초기화
+        if hasattr(self, 'mini_title'):
+            self.mini_title.setText("—")
+        if hasattr(self, 'mini_artist'):
+            self.mini_artist.setText(" ")
 
     def _sort_playlist(self, key: str, ascending: bool):
         """헤더 클릭 시 트랙 정렬. key: 'title'|'artist'|'format'|'dur'"""

@@ -37,31 +37,6 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from dsd_decoder import _get_fir, _bits_to_pcm, dsd_bytes_to_pcm_sacd, _choose_decimation
 
 
-def _detect_sacd_hdr(raw: bytes) -> int:
-    """
-    SACD 섹터 헤더 크기 자동 감지.
-    DSD 오디오 바이트는 통계적으로 평균값이 0x80(50% duty cycle) 근처여야 함.
-    후보 오프셋(0, 4, 8, 16, 32)에서 샘플링해 0x80에 가장 가까운 오프셋 선택.
-    """
-    candidates = [0, 4, 8, 12, 16, 32]
-    best_off = 32  # 기본값
-    best_score = 9999.0
-    sample_size = min(256, SACD_SECTOR_SIZE - 64)
-
-    for off in candidates:
-        if off + sample_size > SACD_SECTOR_SIZE:
-            continue
-        sample = raw[off: off + sample_size]
-        avg = sum(sample) / len(sample)
-        # DSD는 평균이 0x80(128) 근처, 헤더 바이트들은 보통 0x00 근처
-        score = abs(avg - 128.0)
-        if score < best_score:
-            best_score = score
-            best_off = off
-
-    return best_off
-
-
 def _dsd_bits_to_pcm(dsd_bytes: bytes, channels: int,
                      decimation: int = 16,
                      dsd_sr: int = DSD64_FS,
@@ -604,7 +579,6 @@ class SACDDecoder:
         dsd_fs     = track_info.get('dsd_fs', DSD64_FS)
         first      = True
         zi_list    = [None] * channels   # 청크 간 FIR 위상 연속성
-        sacd_hdr   = 32                  # 첫 청크에서 자동 감지 후 교체됨
 
         try:
             with open(filepath, 'rb') as f:
@@ -618,31 +592,16 @@ class SACDDecoder:
                     if not raw:
                         break
 
-                    # ── SACD 섹터 헤더 크기 자동 감지 (첫 청크에서만 1회) ────────
-                    if first:
-                        sacd_hdr = _detect_sacd_hdr(raw)
-                        print(f"[SACD] 헤더 크기 감지: {sacd_hdr}바이트")
-                    # SACD 섹터 헤더 제거 후 DSD 데이터만 추출
+                    # SACD 섹터 헤더(32바이트) 제거 후 DSD 데이터만 추출
+                    SACD_HDR = 32
                     dsd_data = bytearray()
                     n_secs = len(raw) // SACD_SECTOR_SIZE
                     for si in range(n_secs):
                         sec = raw[si*SACD_SECTOR_SIZE : (si+1)*SACD_SECTOR_SIZE]
-                        dsd_data.extend(sec[sacd_hdr:])
-                    raw_dsd = bytes(dsd_data)
+                        dsd_data.extend(sec[SACD_HDR:])
+                    raw = bytes(dsd_data)
 
-                    # ── DST 압축 감지: 오디오 데이터 첫 2바이트가 DST 싱크 패턴 ──
-                    if first and len(raw_dsd) >= 4:
-                        if raw_dsd[:2] == b'\x1f\xff' or raw_dsd[:2] == b'\x7f\xfe':
-                            if error_cb:
-                                error_cb(
-                                    "DST 압축 포맷의 SACD입니다.\n"
-                                    "이 ISO는 DST(Direct Stream Transfer) 방식으로 인코딩되어 있어\n"
-                                    "현재 버전에서 재생할 수 없습니다.\n"
-                                    "Raw DSD ISO로 변환 후 재생해 주세요."
-                                )
-                            return
-
-                    pcm, zi_list = _dsd_bits_to_pcm(raw_dsd, channels, decimation, dsd_fs, zi_list)
+                    pcm, zi_list = _dsd_bits_to_pcm(raw, channels, decimation, dsd_fs, zi_list)
                     if len(pcm) == 0:
                         cur_lsn   += sectors_to_read
                         remaining -= sectors_to_read
@@ -651,28 +610,6 @@ class SACDDecoder:
                     # PCM 유효성 검사 — inf/nan 또는 극단값(garbage)이면 무음으로 교체
                     if not np.isfinite(pcm).all() or np.abs(pcm).max() > 2.0:
                         pcm = np.zeros_like(pcm)
-                    # ── 첫 청크 노이즈 검사: RMS가 비정상적으로 높으면 헤더 오감지 ──
-                    elif first and float(np.sqrt(np.mean(pcm ** 2))) > 0.45:
-                        # RMS > 0.45 = 재생 2초 안에 피크에 가까운 노이즈 → 헤더 재감지
-                        print(f"[SACD] 고RMS 노이즈 감지 (RMS={float(np.sqrt(np.mean(pcm**2))):.3f}), "
-                              "헤더 크기 재시도...")
-                        # 헤더 크기를 4로 재시도
-                        alt_hdr = 4 if sacd_hdr != 4 else 32
-                        dsd_data2 = bytearray()
-                        _raw_orig = raw  # 원본 raw 보존
-                        n_secs2 = len(_raw_orig) // SACD_SECTOR_SIZE
-                        for si in range(n_secs2):
-                            sec2 = _raw_orig[si*SACD_SECTOR_SIZE:(si+1)*SACD_SECTOR_SIZE]
-                            dsd_data2.extend(sec2[alt_hdr:])
-                        pcm2, _ = _dsd_bits_to_pcm(bytes(dsd_data2), channels, decimation, dsd_fs, None)
-                        rms2 = float(np.sqrt(np.mean(pcm2**2))) if len(pcm2) > 0 else 1.0
-                        if rms2 < float(np.sqrt(np.mean(pcm**2))):
-                            sacd_hdr = alt_hdr
-                            pcm = pcm2
-                            zi_list = [None] * channels  # zi 리셋 (헤더 변경)
-                            print(f"[SACD] 헤더 크기 {alt_hdr}로 전환 (RMS 개선)")
-                        if not np.isfinite(pcm).all() or np.abs(pcm).max() > 2.0:
-                            pcm = np.zeros_like(pcm)
 
                     info = {}
                     if first:

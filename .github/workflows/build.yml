@@ -29,6 +29,22 @@ jobs:
           copy "C:\ProgramData\chocolatey\bin\ffmpeg.exe" "ffmpeg.exe"
         shell: cmd
 
+      - name: MinGW(GCC) 경로 설정
+        run: |
+          echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: libdst.dll 빌드 (DST SACD ISO 디코더)
+        run: |
+          cd libdst
+          gcc -O2 -DNDEBUG -shared `
+            buffer_pool.c ccp_calc.c dst_ac.c dst_data.c `
+            dst_fram.c dst_init.c unpack_dst.c yarn.c dst_wrapper.c `
+            -o ../libdst.dll
+          echo "libdst.dll 빌드 완료"
+          dir ../libdst.dll
+        shell: pwsh
+
       - name: PyInstaller 빌드
         run: |
           pyinstaller `
@@ -41,8 +57,11 @@ jobs:
             --add-data "audio_engine.py;." `
             --add-data "dsd_decoder.py;." `
             --add-data "sacd_decoder.py;." `
+            --add-data "dst_ctypes.py;." `
+            --add-data "sacd_ffmpeg.py;." `
             --add-data "upnp_browser.py;." `
             --add-data "ffmpeg.exe;." `
+            --add-binary "libdst.dll;." `
             --hidden-import PyQt5 `
             --hidden-import PyQt5.QtCore `
             --hidden-import PyQt5.QtGui `
@@ -89,12 +108,12 @@ jobs:
           #pragma encoding "utf-8"
           [Setup]
           AppName=Nikon Chinge HiFi Player
-          AppVersion=1.0.0
+          AppVersion=2.8
           AppPublisher=Nikon Chinge
           DefaultDirName={autopf}\Nikon Chinge HiFi Player
           DefaultGroupName=Nikon Chinge HiFi Player
           OutputDir=dist
-          OutputBaseFilename=NikonChingeHiFiPlayer_Setup_1.0.0
+          OutputBaseFilename=NikonChingeHiFiPlayer_Setup_2.8
           SetupIconFile=icon.ico
           Compression=lzma2
           SolidCompression=yes
@@ -119,11 +138,9 @@ jobs:
           Filename: "{app}\Nikon Chinge HiFi Player.exe"; Description: "Launch Nikon Chinge HiFi Player"; Flags: nowait postinstall skipifsilent
 
           [Registry]
-          ; ProgID 등록 — 앱 정보 및 열기 명령
           Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile"; ValueType: string; ValueName: ""; ValueData: "Audio File"; Flags: uninsdeletekey
           Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Nikon Chinge HiFi Player.exe,0"
           Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Nikon Chinge HiFi Player.exe"" ""%1"""
-          ; 각 확장자 OpenWithProgids 등록 — 기존 기본 앱 유지, "연결 프로그램" 목록에 추가
           Root: HKCR; Subkey: ".flac\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
           Root: HKCR; Subkey: ".wav\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
           Root: HKCR; Subkey: ".aiff\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
@@ -141,7 +158,6 @@ jobs:
           Root: HKCR; Subkey: ".dff\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
           Root: HKCR; Subkey: ".iso\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
           "@
-          # UTF-8 BOM 포함으로 저장 — Inno Setup 6은 UTF-8 BOM을 올바르게 처리함
           [System.IO.File]::WriteAllText("$PWD\installer_win.iss", $iss, [System.Text.UTF8Encoding]::new($true))
         shell: powershell
 
@@ -152,7 +168,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/NikonChingeHiFiPlayer_Setup_1.0.0.exe
+          path: dist/NikonChingeHiFiPlayer_Setup_2.8.exe
           retention-days: 30
 
   # ── macOS 빌드 (Apple Silicon) ─────────────────────────────────
@@ -174,6 +190,16 @@ jobs:
       - name: ffmpeg 설치 (APE 재생용)
         run: brew install ffmpeg
 
+      - name: libdst.dylib 빌드 (DST SACD ISO 디코더)
+        run: |
+          cd libdst
+          gcc -O2 -DNDEBUG -shared -fPIC \
+            buffer_pool.c ccp_calc.c dst_ac.c dst_data.c \
+            dst_fram.c dst_init.c unpack_dst.c yarn.c dst_wrapper.c \
+            -o ../libdst.dylib
+          echo "libdst.dylib 빌드 완료"
+          ls -lh ../libdst.dylib
+
       - name: PyInstaller 빌드
         run: |
           pyinstaller \
@@ -187,7 +213,10 @@ jobs:
             --add-data "audio_engine.py:." \
             --add-data "dsd_decoder.py:." \
             --add-data "sacd_decoder.py:." \
+            --add-data "dst_ctypes.py:." \
+            --add-data "sacd_ffmpeg.py:." \
             --add-data "upnp_browser.py:." \
+            --add-binary "libdst.dylib:." \
             --hidden-import PyQt5 \
             --hidden-import PyQt5.QtCore \
             --hidden-import PyQt5.QtGui \
@@ -249,11 +278,8 @@ jobs:
       - name: ffmpeg 번들 포함
         run: cp $(which ffmpeg) "dist/Nikon Chinge HiFi Player.app/Contents/MacOS/ffmpeg"
 
-      - name: entitlements 적용 및 Ad-hoc 코드사이닝
+      - name: Ad-hoc 코드사이닝
         run: |
-          codesign --force --deep --sign - \
-            --entitlements entitlements.plist \
-            "dist/Nikon Chinge HiFi Player.app" || \
           codesign --force --deep --sign - \
             "dist/Nikon Chinge HiFi Player.app" || true
 
@@ -262,11 +288,11 @@ jobs:
           hdiutil create -volname "Nikon Chinge HiFi Player" \
             -srcfolder "dist/Nikon Chinge HiFi Player.app" \
             -ov -format UDZO \
-            "dist/NikonChingeHiFiPlayer-1.0.0-arm64.dmg"
+            "dist/NikonChingeHiFiPlayer-2.8-arm64.dmg"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-arm64
-          path: dist/NikonChingeHiFiPlayer-1.0.0-arm64.dmg
+          path: dist/NikonChingeHiFiPlayer-2.8-arm64.dmg
           retention-days: 30
