@@ -328,6 +328,13 @@ class HiFiPlayer(QMainWindow):
         self.lbl_detail2.hide()
         spec_vlay.addWidget(self.lbl_detail2)
 
+        # Now Playing 초기화용 기본 스타일 스냅샷 (재생 중 트랙 삭제 시 복원)
+        self._np_default_styles = {
+            'format':  self.lbl_format.styleSheet(),
+            'detail':  self.lbl_detail.styleSheet(),
+            'detail2': self.lbl_detail2.styleSheet(),
+        }
+
         lay.addWidget(spec_container)
         lay.addSpacing(6)
 
@@ -1134,6 +1141,7 @@ class HiFiPlayer(QMainWindow):
         if self.current_index == row:
             self.engine.stop()
             self.current_index = -1
+            self._reset_now_playing()   # 재생 중이던 곡 삭제 → 앨범아트 등 정보 초기화
         elif self.current_index > row:
             self.current_index -= 1
         self.drop_hint.setVisible(self.playlist.count() == 0)
@@ -1154,19 +1162,14 @@ class HiFiPlayer(QMainWindow):
         if was_current:
             self.engine.stop()
             self.current_index = -1
+            self._reset_now_playing()   # 재생 중이던 곡 포함 삭제 → 정보 초기화
         else:
             self.current_index = cur
         self.playlist.set_playing_row(self.current_index)
         self.drop_hint.setVisible(self.playlist.count() == 0)
 
-    def _clear_playlist(self):
-        """플레이리스트 전체 지우기 + Now Playing 초기화"""
-        self.engine.stop()
-        self.playlist.clear()
-        self.current_index = -1
-        self.drop_hint.setVisible(True)
-
-        # ── Now Playing 표시 전부 초기화 ──────────────────────────
+    def _reset_now_playing(self):
+        """Now Playing 표시 전부 초기화 — 전체 지우기·재생 중 트랙 삭제 시 공용"""
         self.lbl_title.setText("—")
         self.lbl_artist.setText(" ")
         self.lbl_album.setText(" ")
@@ -1175,6 +1178,15 @@ class HiFiPlayer(QMainWindow):
         self.lbl_cover.clear()
         self.lbl_cover.setStyleSheet("background:#0a0a0f;")
         self.art_stack.setCurrentIndex(0)
+
+        # 포맷/스펙 배지 초기화 (DSD64, 176.4kHz 등 남지 않도록)
+        self.lbl_format.setText("—")
+        self.lbl_format.setStyleSheet(self._np_default_styles['format'])
+        self.lbl_detail.setText("—")
+        self.lbl_detail.setStyleSheet(self._np_default_styles['detail'])
+        self.lbl_detail2.setText("")
+        self.lbl_detail2.setStyleSheet(self._np_default_styles['detail2'])
+        self.lbl_detail2.hide()
 
         # 시크바 / 시간 초기화
         self.seek_slider.setValue(0)
@@ -1195,6 +1207,16 @@ class HiFiPlayer(QMainWindow):
             self.mini_title.setText("—")
         if hasattr(self, 'mini_artist'):
             self.mini_artist.setText(" ")
+        if hasattr(self, 'mini_seek'):
+            self.mini_seek.setValue(0)
+
+    def _clear_playlist(self):
+        """플레이리스트 전체 지우기 + Now Playing 초기화"""
+        self.engine.stop()
+        self.playlist.clear()
+        self.current_index = -1
+        self.drop_hint.setVisible(True)
+        self._reset_now_playing()
 
     def _sort_playlist(self, key: str, ascending: bool):
         """헤더 클릭 시 트랙 정렬. key: 'title'|'artist'|'format'|'dur'"""
