@@ -320,6 +320,110 @@ def _pack_dop(dsd_bits: np.ndarray, marker_toggle: list) -> np.ndarray:
     return (out.astype(np.float32) / 8388608.0)
 
 
+# ─────────────────────────────────────────────
+# MP3 구조대 헬퍼 — ID3 안전 제거 + 진단 로그
+# ─────────────────────────────────────────────
+def _mp3_frame_len(d: bytes, i: int) -> int:
+    """MPEG Layer III 프레임 헤더 검증. 유효하면 프레임 길이(bytes), 아니면 0.
+
+    CRC 보호 프레임(fffa)·MPEG2/2.5 저샘플레이트도 인식한다.
+    """
+    if i + 4 > len(d) or d[i] != 0xFF or (d[i+1] & 0xE0) != 0xE0:
+        return 0
+    ver   = (d[i+1] >> 3) & 3   # 0=MPEG2.5, 2=MPEG2, 3=MPEG1
+    layer = (d[i+1] >> 1) & 3   # 1=Layer III
+    br    = (d[i+2] >> 4) & 15
+    srx   = (d[i+2] >> 2) & 3
+    pad   = (d[i+2] >> 1) & 1
+    if ver == 1 or layer != 1 or br in (0, 15) or srx == 3:
+        return 0
+    BR_V1 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+    BR_V2 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+    SR    = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
+    bitrate = (BR_V1[br] if ver == 3 else BR_V2[br]) * 1000
+    sr      = SR[ver][srx]
+    if not bitrate or not sr:
+        return 0
+    spf = 1152 if ver == 3 else 576   # samples per frame (Layer III)
+    return (spf // 8) * bitrate // sr + pad
+
+
+def _mp3_strip_to_file(src: str, dst: str):
+    """ID3v2 태그·앞쪽 쓰레기·ID3v1 트레일러를 제거한 순수 MPEG 스트림을 dst에 기록.
+
+    첫 프레임은 '해당 프레임 길이만큼 뒤에 또 유효 헤더가 있는지'로 검증해
+    가짜 sync(0xFFEx 우연 일치)를 걸러낸다.
+    반환: (첫 유효 프레임 오프셋, ID3v2 태그 끝 오프셋)
+    """
+    with open(src, 'rb') as f:
+        d = f.read()
+    off = 0
+    if d[:3] == b'ID3' and len(d) > 10:
+        off = ((d[6] << 21) | (d[7] << 14) | (d[8] << 7) | d[9]) + 10
+        if d[5] & 0x10:   # footer 플래그
+            off += 10
+        off = min(off, len(d))
+    # 첫 검증된 프레임 탐색 (태그 크기가 깨진 경우 대비, 최대 3MB 스캔)
+    i = off
+    limit = min(len(d), off + 3_000_000)
+    while i < limit:
+        L = _mp3_frame_len(d, i)
+        if L and (_mp3_frame_len(d, i + L) or i + L >= len(d) - 128):
+            break
+        i += 1
+    if i >= limit:
+        # 태그 오프셋이 깨졌을 가능성 → 파일 처음부터 재탐색
+        i = 0
+        while i < min(len(d), 3_000_000):
+            L = _mp3_frame_len(d, i)
+            if L and _mp3_frame_len(d, i + L):
+                break
+            i += 1
+        if i >= min(len(d), 3_000_000):
+            raise ValueError("유효한 MPEG 프레임을 찾지 못함")
+    end = len(d) - 128 if d[-128:-125] == b'TAG' else len(d)
+    with open(dst, 'wb') as f:
+        f.write(d[i:end])
+    return i, off
+
+
+def _mp3_log_path() -> str:
+    """플랫폼별 진단 로그 파일 경로 (원격 진단용 — 사용자가 이 파일을 보내면 됨)"""
+    import tempfile
+    try:
+        if _IS_WIN:
+            base = os.path.join(os.environ.get('LOCALAPPDATA', tempfile.gettempdir()),
+                                'NikonChingeHiFiPlayer', 'logs')
+        elif _IS_MAC:
+            base = os.path.expanduser('~/Library/Logs/NikonChingeHiFiPlayer')
+        else:
+            base = os.path.expanduser('~/.local/share/NikonChingeHiFiPlayer/logs')
+        os.makedirs(base, exist_ok=True)
+        return os.path.join(base, 'mp3_decode.log')
+    except Exception:
+        return os.path.join(tempfile.gettempdir(), 'ncmp_mp3_decode.log')
+
+
+def _mp3_write_log(filepath: str, stages: list) -> str:
+    """MP3 폴백 진행/실패 내역을 로그 파일에 append. 반환: 로그 경로"""
+    import datetime
+    logp = _mp3_log_path()
+    try:
+        with open(logp, 'a', encoding='utf-8') as f:
+            f.write(f"\n[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {filepath}\n")
+            try:
+                f.write(f"  파일 크기: {os.path.getsize(filepath)} bytes\n")
+            except Exception:
+                pass
+            f.write(f"  플랫폼: {platform.system()} / 번들: "
+                    f"{getattr(sys, '_MEIPASS', '아님(소스 실행)')}\n")
+            for s in stages:
+                f.write(f"  - {s}\n")
+    except Exception:
+        pass
+    return logp
+
+
 class AudioDevice:
     def __init__(self, index, name, max_output_channels, default_samplerate, hostapi_name=''):
         self.index = index
@@ -602,8 +706,16 @@ class AudioEngine:
                 r'C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe',
             ]
 
+        # PyInstaller 6+ onedir: 데이터 파일은 exe 옆이 아니라 _internal/(sys._MEIPASS)에 있음
+        _meipass = getattr(sys, '_MEIPASS', None)
+        _meipass_paths = []
+        if _meipass:
+            _meipass_paths = [os.path.join(_meipass, 'ffmpeg.exe'),
+                              os.path.join(_meipass, 'ffmpeg')]
+
         ffmpeg_bin = None
         for candidate in [
+            *_meipass_paths,
             _bundle_ffmpeg_win,
             _bundle_ffmpeg_mac,
             shutil.which('ffmpeg'),
@@ -746,6 +858,83 @@ class AudioEngine:
         data = raw.reshape(-1, channels)
         return data, srate
 
+    # ─────────────────────────────────────────────
+    # MP3 구조대 — 구형/손상 MP3 폴백 체인
+    # (soundfile이 거부한 .mp3 전용; 정상 재생 경로에는 영향 없음)
+    # ─────────────────────────────────────────────
+    def _load_mp3_fallback(self, filepath: str, first_error: str = ''):
+        """soundfile이 실패한 MP3 를 3단계로 구조:
+          A) ID3v2/쓰레기 구간 제거본(ASCII 임시경로) → soundfile 재시도
+             — 대형 앨범아트, 깨진 태그, 태그-프레임 사이 쓰레기 대응
+             — 임시 파일명이 ASCII라 Windows 한글/특수문자 경로 문제도 함께 회피
+          B) miniaudio 내장 MP3 디코더 (subprocess 불필요 — ffmpeg 없는 환경 대응)
+          C) ffmpeg subprocess (최후 수단)
+        전부 실패 시 단계별 사유를 로그 파일로 남기고 예외 발생
+        """
+        import tempfile
+        stages = [f"soundfile 1차: {first_error or '실패'}"]
+        tmp = None
+        try:
+            # ── A단계: ID3 안전 제거본 생성 → soundfile ──────────
+            try:
+                fd, tmp = tempfile.mkstemp(prefix='ncmp_mp3_', suffix='.mp3')
+                os.close(fd)
+                first, tag_end = _mp3_strip_to_file(filepath, tmp)
+                stages.append(f"A: ID3 제거 (태그끝={tag_end}, 첫 유효프레임={first})")
+                try:
+                    data, srate = sf.read(tmp, dtype='float64', always_2d=True)
+                    print(f"[Audio] MP3 구조대 A단계(ID3 제거+soundfile) 성공")
+                    _mp3_write_log(filepath, stages + ["→ A단계 성공"])
+                    return data, srate
+                except Exception as e:
+                    stages.append(f"A 실패: {e}")
+            except Exception as e:
+                stages.append(f"A(ID3 제거) 자체 실패: {e}")
+
+            # ── B단계: miniaudio 내장 MP3 디코더 ────────────────
+            if MA_AVAILABLE:
+                for src, label in ((tmp, 'B(제거본)'), (filepath, 'B(원본)')):
+                    if not src or not os.path.isfile(src) or os.path.getsize(src) == 0:
+                        continue
+                    try:
+                        dec = miniaudio.mp3_read_file_f32(src)
+                        if dec.nchannels <= 0 or dec.sample_rate <= 0:
+                            raise ValueError(f"비정상 디코드 결과 ch={dec.nchannels} sr={dec.sample_rate}")
+                        raw  = np.asarray(dec.samples, dtype=np.float64)
+                        data = raw.reshape(-1, dec.nchannels)
+                        print(f"[Audio] MP3 구조대 {label} miniaudio 성공 "
+                              f"({dec.sample_rate}Hz {dec.nchannels}ch)")
+                        _mp3_write_log(filepath, stages + [f"→ {label} miniaudio 성공"])
+                        return data, dec.sample_rate
+                    except Exception as e:
+                        stages.append(f"{label} miniaudio 실패: {e}")
+            else:
+                stages.append("B: miniaudio 미설치 — 건너뜀")
+
+            # ── C단계: ffmpeg subprocess ────────────────────────
+            for src, label in ((tmp, 'C(제거본)'), (filepath, 'C(원본)')):
+                if not src or not os.path.isfile(src) or os.path.getsize(src) == 0:
+                    continue
+                try:
+                    data, srate = self._load_pcm_via_ffmpeg(src)
+                    print(f"[Audio] MP3 구조대 {label} ffmpeg 성공")
+                    _mp3_write_log(filepath, stages + [f"→ {label} ffmpeg 성공"])
+                    return data, srate
+                except Exception as e:
+                    stages.append(f"{label} ffmpeg 실패: {e}")
+
+            # ── 전부 실패: 진단 로그 남기고 예외 ────────────────
+            logp = _mp3_write_log(filepath, stages + ["→ 모든 단계 실패"])
+            raise RuntimeError(
+                f"MP3 디코딩 실패 (soundfile→ID3제거→miniaudio→ffmpeg 모두 실패). "
+                f"진단 로그: {logp}")
+        finally:
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+
     def _load_pcm(self, filepath: str) -> dict:
         if not SF_AVAILABLE:
             raise RuntimeError("soundfile 없음")
@@ -765,9 +954,14 @@ class AudioEngine:
                 # float64로 로드 — EQ 연산 정밀도 확보
                 data, srate = sf.read(filepath, dtype='float64', always_2d=True)
             except Exception as e:
-                # soundfile 실패 시 ffmpeg로 재시도
-                print(f"[Audio] soundfile 실패 ({e}), ffmpeg 폴백 시도...")
-                data, srate = self._load_pcm_via_ffmpeg(filepath)
+                if ext == 'mp3':
+                    # 구형/손상 MP3: 구조대 체인 (ID3 제거 → miniaudio → ffmpeg)
+                    print(f"[Audio] soundfile 실패 ({e}), MP3 구조대 시도...")
+                    data, srate = self._load_mp3_fallback(filepath, str(e))
+                else:
+                    # soundfile 실패 시 ffmpeg로 재시도
+                    print(f"[Audio] soundfile 실패 ({e}), ffmpeg 폴백 시도...")
+                    data, srate = self._load_pcm_via_ffmpeg(filepath)
         # 피크 레벨 확인 및 정규화
         peak = np.abs(data).max()
         if peak > 1.0:
