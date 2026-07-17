@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QComboBox, QFrame, QSplitter, QProgressBar,
     QToolButton, QSizePolicy, QMenu, QAction, QAbstractItemView,
     QMessageBox, QStyle, QGridLayout, QScrollArea, QCheckBox,
-    QStackedWidget, QStyledItemDelegate,
+    QStackedWidget, QStyledItemDelegate, QProxyStyle,
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QThread, pyqtSignal, QUrl, QSize, QMimeData,
@@ -48,6 +48,27 @@ from ui_widgets import (
     ToggleSwitch, TransportButton, IconButton, VUMeter,
     TrackItem, PlaylistDelegate, PlaylistHeader, PlaylistWidget,
 )
+
+
+class ClickJumpSliderStyle(QProxyStyle):
+    """슬라이더 홈(groove) 클릭 시 핸들이 클릭 지점으로 바로 점프하는 스타일.
+
+    macOS 기본 스타일은 원래 이 동작이지만, Windows 기본 스타일은
+    클릭 시 페이지 스텝만 이동해서 시크/볼륨 클릭이 클릭 위치로 가지 않음.
+    SH_Slider_AbsoluteSetButtons에 왼쪽 버튼을 지정해 전 플랫폼 동작을 통일한다.
+    """
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.SH_Slider_AbsoluteSetButtons:
+            return int(Qt.LeftButton)
+        return super().styleHint(hint, option, widget, returnData)
+
+
+def _apply_click_jump(slider: QSlider):
+    """슬라이더에 클릭-점프 스타일 적용 (proxy 수명은 슬라이더에 귀속)"""
+    proxy = ClickJumpSliderStyle(slider.style().objectName())
+    proxy.setParent(slider)   # QWidget.setStyle은 소유권을 갖지 않으므로 부모로 수명 관리
+    slider.setStyle(proxy)
+
 
 class HiFiPlayer(QMainWindow):
     _position_signal = pyqtSignal(float, float)
@@ -325,6 +346,7 @@ class HiFiPlayer(QMainWindow):
         self.seek_slider = QSlider(Qt.Horizontal)
         self.seek_slider.setRange(0, 1000)
         self.seek_slider.setValue(0)
+        _apply_click_jump(self.seek_slider)   # Windows에서도 클릭 지점으로 즉시 점프
         self.seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self.seek_slider.sliderReleased.connect(self._on_seek_released)
 
@@ -397,6 +419,7 @@ class HiFiPlayer(QMainWindow):
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(80)
         self.vol_slider.setToolTip("볼륨")
+        _apply_click_jump(self.vol_slider)    # Windows에서도 클릭 지점으로 즉시 점프
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
         self.engine.set_volume(0.8)
 
@@ -752,6 +775,7 @@ class HiFiPlayer(QMainWindow):
         self.mini_seek = QSlider(Qt.Horizontal)
         self.mini_seek.setRange(0, 1000)
         self.mini_seek.setFixedHeight(14)
+        _apply_click_jump(self.mini_seek)     # Windows에서도 클릭 지점으로 즉시 점프
         self.mini_seek.sliderPressed.connect(self._on_seek_pressed)
         self.mini_seek.sliderReleased.connect(self._on_mini_seek_released)
 
