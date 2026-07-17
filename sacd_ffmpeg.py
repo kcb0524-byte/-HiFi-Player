@@ -21,11 +21,30 @@ from typing import Optional
 
 
 def find_ffmpeg():
-    """ffmpeg 실행 파일 위치 탐색."""
-    # 우선순위: 시스템 PATH → Homebrew 경로
-    for candidate in ['ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg']:
-        if shutil.which(candidate):
-            return candidate
+    """ffmpeg 실행 파일 위치 탐색.
+
+    우선순위: PyInstaller 번들 동봉본 → 시스템 PATH → Homebrew/Windows 표준 경로
+    (audio_engine._load_pcm_via_ffmpeg 의 탐색 순서와 동일하게 유지)
+    """
+    exe_name = 'ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'
+    candidates = []
+    # PyInstaller 번들: PyInstaller 6+ onedir은 _internal(_MEIPASS), 구버전은 exe 옆
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        candidates.append(os.path.join(meipass, exe_name))
+    candidates.append(os.path.join(os.path.dirname(sys.executable), exe_name))
+    candidates.append(shutil.which('ffmpeg'))
+    candidates += ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']
+    if sys.platform == 'win32':
+        candidates += [
+            r'C:\ProgramData\chocolatey\bin\ffmpeg.exe',
+            r'C:\ffmpeg\bin\ffmpeg.exe',
+            r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
+            r'C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe',
+        ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
     return None
 
 

@@ -24,6 +24,11 @@ SACD_MAGIC_AREA    = b'TWOCHTOC'
 SACD_MAGIC_MULCH   = b'MULCHTOC'
 SACD_MAGIC_TRACK   = b'SACDTTxt'
 
+# Area TOC frame_format (offset 0x15) — Scarletbook 스펙
+FRAME_FORMAT_DST       = 0   # DST 압축 → ffmpeg dst 디코더 필요
+FRAME_FORMAT_DSD_3_14  = 2   # 비압축 DSD (3 frames in 14 sectors)
+FRAME_FORMAT_DSD_3_16  = 3   # 비압축 DSD (3 frames in 16 sectors)
+
 # DSD 샘플레이트
 DSD64_FS  = 2822400   # DSD64 (1bit × 64 × 44100)
 DSD128_FS = 5644800   # DSD128
@@ -159,6 +164,12 @@ def _parse_area_toc(f, area_lsn: int) -> Optional[Dict]:
         # channels: TWOCHTOC=2ch, MULCHTOC=멀티
         channels = 2 if magic == SACD_MAGIC_AREA else min(max(sec[0x14], 1), 6)
 
+        # frame_format (0x15): 0=DST 압축, 2/3=비압축 DSD
+        frame_format = sec[0x15]
+
+        # Area TOC 크기 (0x0A, 섹터 단위) — SACDTTxt 등이 이 범위 안에 있음
+        area_size = struct.unpack_from('>H', sec, 0x0a)[0]
+
         # DSD 샘플레이트: 항상 DSD64(2822400) — SACD 표준
         dsd_fs     = DSD64_FS
         decimation = _choose_decimation(dsd_fs)   # DSD64 → 176400 Hz (÷16)
@@ -285,15 +296,52 @@ def _parse_area_toc(f, area_lsn: int) -> Optional[Dict]:
             return None
 
         return {
-            'dsd_fs':     dsd_fs,
-            'pcm_fs':     pcm_fs,
-            'decimation': decimation,
-            'channels':   max(1, min(channels, 6)),
-            'tracks':     tracks,
+            'dsd_fs':       dsd_fs,
+            'pcm_fs':       pcm_fs,
+            'decimation':   decimation,
+            'channels':     max(1, min(channels, 6)),
+            'frame_format': frame_format,
+            'area_lsn':     area_lsn,
+            'area_size':    area_size,
+            'tracks':       tracks,
         }
     except Exception as e:
         print(f"[SACD] _parse_area_toc error: {e}")
         return None
+
+
+# ─────────────────────────────────────────────────────────────
+# SACDTRL2 트랙 타임코드 파서 (DST 트랙 재생시간 계산용)
+# ─────────────────────────────────────────────────────────────
+def _parse_trl2_start_times(f, area_lsn: int) -> List[float]:
+    """SACDTRL2 섹터에서 트랙 시작 타임코드 목록(초) 반환
+
+    실측 구조 (hex 덤프 검증):
+      0x00-0x07: 'SACDTRL2'
+      0x08+    : 4바이트 엔트리 [minutes 1B][seconds 1B][frames 1B][pad 1B]
+                 (frames: 0~74, 75프레임 = 1초)
+                 트랙 시작 시각 N개 + 마지막 엔트리 = Area 끝 시각
+                 이후 0으로 패딩
+
+    DST는 가변 압축이라 섹터 수로 재생시간을 계산할 수 없음 → 타임코드 사용
+    """
+    times = []
+    try:
+        for i in range(1, 10):
+            sec = _read_sector(f, area_lsn + i)
+            if sec[:8] != b'SACDTRL2':
+                continue
+            off = 0x08
+            while off + 4 <= len(sec):
+                mm, ss, ff = sec[off], sec[off+1], sec[off+2]
+                if mm == 0 and ss == 0 and ff == 0 and times:
+                    break
+                times.append(mm * 60 + ss + ff / 75.0)
+                off += 4
+            break
+    except Exception as e:
+        print(f"[SACD] SACDTRL2 parse error: {e}")
+    return times
 
 
 # ─────────────────────────────────────────────────────────────
@@ -373,7 +421,8 @@ def _parse_sacd_text_field(chunk: bytes, field_id=None) -> str:
 # ─────────────────────────────────────────────────────────────
 # 트랙 메타데이터 추출 (Text TOC)
 # ─────────────────────────────────────────────────────────────
-def _extract_track_titles(f, master_lsn: int, track_count: int) -> List[str]:
+def _extract_track_titles(f, master_lsn: int, track_count: int,
+                          area_lsn: int = 0, area_size: int = 0) -> List[str]:
     """SACDTTxt 섹터에서 트랙 제목 추출 (없으면 Track N 반환)
 
     실제 SACDTTxt 덤프:
@@ -385,25 +434,32 @@ def _extract_track_titles(f, master_lsn: int, track_count: int) -> List[str]:
     """
     titles = [f"Track {i+1}" for i in range(track_count)]
     try:
-        # SACDTTxt 탐색: master_lsn 근처 (510~530) 및 area_lsn 근처 (544~560)
+        # SACDTTxt 탐색:
+        #   1순위 — Area TOC 범위 (area_lsn ~ area_lsn+area_size):
+        #           스펙상 트랙 텍스트는 Area TOC 안에 있음
+        #           (예: Jennifer=LSN 549(크기 8), Jeff Beck=LSN 581(크기 40))
+        #   2순위 — 기존 휴리스틱: master_lsn/510/540 근처 30섹터
+        candidate_lsns = []
+        if area_lsn > 0:
+            candidate_lsns.extend(range(area_lsn, area_lsn + max(8, min(area_size, 64))))
+        for base in [master_lsn, master_lsn - 10, 510, 540]:
+            candidate_lsns.extend(range(base, base + 30))
+
         txt_sec = None
         txt_lsn = None
-        search_start = [master_lsn, master_lsn - 10, 510, 540]
-        for base in search_start:
-            if txt_sec:
-                break
-            for delta in range(0, 30):
-                lsn = base + delta
-                if lsn < 0:
-                    continue
-                try:
-                    sec = _read_sector(f, lsn)
-                    if sec[:8] == SACD_MAGIC_TRACK:
-                        txt_sec = sec
-                        txt_lsn = lsn
-                        break
-                except Exception:
-                    pass
+        seen = set()
+        for lsn in candidate_lsns:
+            if lsn < 0 or lsn in seen:
+                continue
+            seen.add(lsn)
+            try:
+                sec = _read_sector(f, lsn)
+                if sec[:8] == SACD_MAGIC_TRACK:
+                    txt_sec = sec
+                    txt_lsn = lsn
+                    break
+            except Exception:
+                pass
 
         if txt_sec is None:
             return titles
@@ -511,7 +567,15 @@ class SACDDecoder:
                     return []
 
                 tc = len(area['tracks'])
-                titles = _extract_track_titles(f, mtoc.get('master_lsn', SACD_LSN_MASTER), tc)
+                titles = _extract_track_titles(f, mtoc.get('master_lsn', SACD_LSN_MASTER), tc,
+                                               area.get('area_lsn', 0),
+                                               area.get('area_size', 0))
+
+                # DST 압축 Area: 섹터 수로 시간 계산 불가 → SACDTRL2 타임코드 사용
+                is_dst = area.get('frame_format') == FRAME_FORMAT_DST
+                trl2_times = []
+                if is_dst:
+                    trl2_times = _parse_trl2_start_times(f, area.get('area_lsn', 0))
 
                 for i, t in enumerate(area['tracks']):
                     # 재생 시간 추정:
@@ -521,6 +585,10 @@ class SACDDecoder:
                     bytes_per_sec = (area['dsd_fs'] // 8) * area['channels']
                     sector_bytes  = t['size'] * SACD_SECTOR_SIZE
                     duration      = sector_bytes / bytes_per_sec if bytes_per_sec > 0 else 0
+
+                    # DST: TRL2 타임코드 (연속 시작 시각 차 = 트랙 길이)
+                    if is_dst and i + 1 < len(trl2_times):
+                        duration = max(0.0, trl2_times[i+1] - trl2_times[i])
 
                     tracks.append({
                         'index':       i,
@@ -533,6 +601,7 @@ class SACDDecoder:
                         'decimation':  area['decimation'],
                         'lsn':         t['lsn'],
                         'size':        t['size'],
+                        'frame_format': area.get('frame_format'),
                         'filepath':    filepath,
                     })
         except Exception as e:
@@ -570,6 +639,11 @@ class SACDDecoder:
                        chunk_cb, done_cb, error_cb,
                        stop_ev: threading.Event,
                        stopped_ev: Optional[threading.Event]):
+        # DST 압축 Area → ffmpeg dst 디코더 경로 (비압축 DSD 경로는 그대로 유지)
+        if track_info.get('frame_format') == FRAME_FORMAT_DST:
+            return self._stream_worker_dst(track_info, chunk_cb, done_cb,
+                                           error_cb, stop_ev, stopped_ev)
+
         filepath   = track_info['filepath']
         lsn        = track_info['lsn']
         size       = track_info['size']
@@ -647,3 +721,291 @@ class SACDDecoder:
         finally:
             if stopped_ev:
                 stopped_ev.set()
+
+    # ─────────────────────────────────────────
+    # DST 압축 트랙 스트리밍 워커 (ffmpeg dst 디코더 이용)
+    # ─────────────────────────────────────────
+    def _stream_worker_dst(self, track_info: Dict,
+                           chunk_cb, done_cb, error_cb,
+                           stop_ev: threading.Event,
+                           stopped_ev: Optional[threading.Event]):
+        """
+        DST 압축 SACD 트랙 재생 경로:
+          ISO 오디오 섹터 → DST 프레임 추출 → DFF 컨테이너로 래핑
+          → ffmpeg(libavcodec dst 디코더)로 DSD 디코딩 + PCM 변환
+          → f32le PCM을 기존 chunk_cb 파이프라인에 공급
+        """
+        import subprocess
+
+        filepath = track_info['filepath']
+        lsn      = track_info['lsn']
+        size     = track_info['size']
+        channels = track_info['channels']
+        pcm_fs   = track_info['pcm_fs']
+        dsd_fs   = track_info.get('dsd_fs', DSD64_FS)
+
+        stage    = '초기화'
+        proc     = None
+        tmp_path = None
+        try:
+            # ── 1단계: ffmpeg 탐색 ──────────────────────────
+            stage = 'ffmpeg 탐색'
+            from sacd_ffmpeg import find_ffmpeg
+            ffmpeg = find_ffmpeg()
+            if not ffmpeg:
+                raise RuntimeError(
+                    "이 SACD ISO는 DST 압축이며 재생에 ffmpeg이 필요합니다. "
+                    "(macOS: brew install ffmpeg)")
+
+            # ── 2단계: DST 프레임 추출 ──────────────────────
+            stage = 'DST 프레임 추출'
+            with open(filepath, 'rb') as f:
+                frames = _extract_dst_frames(f, lsn, lsn + size, stop_ev)
+            if stop_ev.is_set():
+                return
+            if not frames:
+                raise RuntimeError(
+                    f"오디오 섹터(LSN {lsn}~{lsn+size})에서 DST 프레임을 찾지 못했습니다.")
+            print(f"[SACD-DST] 프레임 추출 완료: {len(frames)}개 "
+                  f"(≈{len(frames)/75.0:.1f}초, 평균 {sum(map(len, frames))//len(frames)}B)")
+
+            # ── 3단계: DFF 임시 파일 생성 ────────────────────
+            # ffmpeg iff demuxer는 DST 패킷 추출에 seek 가능한 입력이
+            # 필요하므로 (stdin 파이프 불가, 실측 확인) 임시 파일 사용
+            stage = 'DFF 임시 파일 생성'
+            import tempfile
+            fd, tmp_path = tempfile.mkstemp(prefix='ncmp_sacd_dst_', suffix='.dff')
+            with _os.fdopen(fd, 'wb') as tf:
+                for blob in _build_dff_stream(frames, channels, dsd_fs):
+                    if stop_ev.is_set():
+                        return
+                    tf.write(blob)
+            frames = None  # 메모리 해제 (수십 MB)
+
+            # ── 4단계: ffmpeg 실행 (DFF 파일 → f32le PCM stdout) ──
+            stage = 'ffmpeg 실행'
+            cmd = [ffmpeg, '-v', 'error',
+                   '-i', tmp_path,
+                   '-f', 'f32le',
+                   '-ar', str(pcm_fs),
+                   '-ac', str(channels),
+                   'pipe:1']
+            sp_kwargs = {}
+            if _sys.platform == 'win32':
+                sp_kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+            proc = subprocess.Popen(cmd,
+                                    stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    bufsize=0, **sp_kwargs)
+
+            stderr_buf = []
+            def _drain_stderr():
+                try:
+                    stderr_buf.append(proc.stderr.read())
+                except Exception:
+                    pass
+
+            threading.Thread(target=_drain_stderr, daemon=True).start()
+
+            # ── 5단계: PCM 수신 → 재생 큐 공급 ──────────────
+            stage = 'PCM 디코딩'
+            bytes_per_frame = 4 * channels           # f32le
+            first_read  = 256 * 1024                 # 빠른 첫 소리 (~0.18초)
+            normal_read = 2 * pcm_fs * bytes_per_frame  # ~2초 단위
+            def _read_upto(stream, n):
+                """파이프에서 최대 n바이트 누적 읽기 (EOF 시 잔여분 반환)"""
+                buf = bytearray()
+                while len(buf) < n and not stop_ev.is_set():
+                    part = stream.read(n - len(buf))
+                    if not part:
+                        break
+                    buf.extend(part)
+                return bytes(buf)
+
+            first    = True
+            leftover = b''
+            while not stop_ev.is_set():
+                data = _read_upto(proc.stdout, first_read if first else normal_read)
+                if not data:
+                    break
+                data = leftover + data
+                usable = (len(data) // bytes_per_frame) * bytes_per_frame
+                leftover = data[usable:]
+                if usable == 0:
+                    continue
+                pcm = np.frombuffer(data[:usable], dtype='<f4').reshape(-1, channels)
+
+                info = {}
+                if first:
+                    dsd_level = dsd_fs // 44100
+                    info = {
+                        'sample_rate':     pcm_fs,
+                        'dsd_sample_rate': dsd_fs,
+                        'dsd_rate':        f'DSD{dsd_level} ({dsd_fs/1e6:.1f}MHz)',
+                        'channels':        channels,
+                        'format':          f'DSD{dsd_level}',
+                        'bit_depth':       1,
+                        'title':           track_info.get('title', ''),
+                        'album':           track_info.get('album', ''),
+                        'source':          'SACD ISO',
+                    }
+                    first = False
+                chunk_cb(pcm, pcm_fs, info)
+
+            if stop_ev.is_set():
+                return
+
+            rc = proc.wait(timeout=5)
+            err_txt = b''.join(stderr_buf).decode('utf-8', 'ignore').strip()
+            if err_txt:
+                print(f"[SACD-DST] ffmpeg stderr: {err_txt[:500]}")
+            if first:
+                # PCM을 한 바이트도 받지 못함 → 디코딩 실패
+                raise RuntimeError(
+                    f"ffmpeg dst 디코더가 PCM을 출력하지 않았습니다 "
+                    f"(rc={rc}): {err_txt[:300] or '오류 메시지 없음'}")
+            print(f"[SACD-DST] 디코딩 완료 (rc={rc})")
+
+            if done_cb:
+                done_cb()
+        except Exception as e:
+            print(f"[SACD-DST] 재생 실패 — 단계: {stage}, 원인: {e}")
+            if error_cb:
+                error_cb(f"SACD DST 재생 실패 [{stage}]: {e}")
+        finally:
+            if proc is not None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+            if tmp_path is not None:
+                try:
+                    _os.remove(tmp_path)
+                except Exception:
+                    pass
+            if stopped_ev:
+                stopped_ev.set()
+
+
+# ─────────────────────────────────────────────────────────────
+# DST 프레임 추출 + DFF 컨테이너 래핑 (ffmpeg 입력용)
+# ─────────────────────────────────────────────────────────────
+def _extract_dst_frames(f, start_lsn: int, end_lsn: int,
+                        stop_ev: Optional[threading.Event] = None) -> list:
+    """SACD 오디오 섹터에서 DST 프레임 목록 추출 (크로스섹터 패킷 연결)
+
+    오디오 섹터 구조 (Scarletbook, 실제 hex 덤프로 검증):
+      byte0        : packet_info_count(비트7-5) frame_info_count(비트4-2)
+                     reserved(비트1) dst_encoded(비트0)
+      packet_info  : 2B × pi — frame_start(비트7) data_type(비트5-3, 2=오디오)
+                     packet_length(비트2-0 << 8 | 둘째바이트, 11비트)
+      frame_info   : (dst=4B, dsd=3B) × fi
+      이후         : 패킷 데이터 연속 (섹터 경계 넘어 이어질 수 있음)
+
+    DST 프레임 = frame_start=1인 오디오 패킷부터 다음 frame_start=1 전까지
+    """
+    frames        = []
+    frame_buf     = bytearray()
+    in_frame      = False
+    pending       = 0      # 이전 섹터에서 이어지는 패킷의 남은 바이트 수
+    pending_audio = False  # 이어지는 패킷이 오디오(dt=2)인지
+    MAX_FRAME     = 1 << 20  # 파싱 오류 가드 (정상 DST 프레임 ≤ ~10KB)
+
+    for lsn in range(start_lsn, end_lsn):
+        if stop_ev is not None and stop_ev.is_set():
+            return frames
+        f.seek(lsn * SACD_SECTOR_SIZE)
+        sec = f.read(SACD_SECTOR_SIZE)
+        if len(sec) < SACD_SECTOR_SIZE:
+            break
+
+        hdr     = sec[0]
+        pi      = (hdr >> 5) & 7
+        fi      = (hdr >> 2) & 7
+        dst_enc = hdr & 1
+
+        ptr  = 1
+        pkts = []
+        for _ in range(pi):
+            if ptr + 2 > len(sec):
+                break
+            b0, b1 = sec[ptr], sec[ptr + 1]
+            ptr += 2
+            pkts.append(((b0 >> 7) & 1,            # frame_start
+                         (b0 >> 3) & 7,             # data_type
+                         ((b0 & 7) << 8) | b1))     # packet_length
+        ptr += fi * (4 if dst_enc else 3)
+
+        # 이전 섹터에서 이어진 패킷 데이터 먼저 소비
+        if pending > 0:
+            take = min(pending, len(sec) - ptr)
+            if pending_audio and in_frame:
+                frame_buf.extend(sec[ptr:ptr + take])
+            ptr     += take
+            pending -= take
+            if pending > 0:
+                continue  # 이 섹터 전체가 이어지는 데이터
+
+        for fs, dt, pl in pkts:
+            avail    = len(sec) - ptr
+            take     = min(pl, avail)
+            is_audio = (dt == 2)
+            if is_audio:
+                if fs:
+                    if in_frame and frame_buf:
+                        frames.append(bytes(frame_buf))
+                    frame_buf = bytearray()
+                    in_frame  = True
+                if in_frame:
+                    frame_buf.extend(sec[ptr:ptr + take])
+                    if len(frame_buf) > MAX_FRAME:
+                        print(f"[SACD-DST] LSN {lsn}: 비정상 프레임 크기 "
+                              f"({len(frame_buf)}B) — 프레임 폐기")
+                        frame_buf = bytearray()
+                        in_frame  = False
+            ptr += take
+            if take < pl:
+                # 패킷이 섹터 경계를 넘음 → 다음 섹터에서 이어서 소비
+                pending       = pl - take
+                pending_audio = is_audio
+                break
+
+    # 트랙 끝: 잔여 프레임 (경계에서 잘렸어도 ffmpeg이 해당 프레임만 건너뜀)
+    if in_frame and frame_buf:
+        frames.append(bytes(frame_buf))
+    return frames
+
+
+def _dff_chunk(ckid: bytes, data: bytes) -> bytes:
+    """DSDIFF 청크: id(4) + size(8 BE) + data (+홀수 패딩)"""
+    pad = b'\x00' if len(data) & 1 else b''
+    return ckid + struct.pack('>Q', len(data)) + data + pad
+
+
+def _build_dff_stream(frames: list, channels: int, dsd_fs: int):
+    """DST 프레임 목록 → DSDIFF(DFF) 컨테이너 바이트 제너레이터
+
+    ffmpeg의 iff demuxer + dst 디코더가 그대로 읽을 수 있는 표준 .dff 스트림
+    (헤더에 정확한 크기 기입 — 파이프 입력에서도 안전)
+    """
+    ch_ids_all = [b'SLFT', b'SRGT', b'C   ', b'LFE ', b'LS  ', b'RS  ']
+    ch_ids = b''.join(ch_ids_all[i % len(ch_ids_all)] for i in range(channels))
+
+    fver = _dff_chunk(b'FVER', struct.pack('>I', 0x01050000))
+    prop = _dff_chunk(b'PROP', b'SND '
+                      + _dff_chunk(b'FS  ', struct.pack('>I', dsd_fs))
+                      + _dff_chunk(b'CHNL', struct.pack('>H', channels) + ch_ids)
+                      + _dff_chunk(b'CMPR', b'DST ' + bytes([11]) + b'DST Encoded'))
+    frte = _dff_chunk(b'FRTE', struct.pack('>IH', len(frames), 75))
+
+    dstf_total = sum(12 + len(fr) + (len(fr) & 1) for fr in frames)
+    dst_size   = len(frte) + dstf_total
+    body_size  = 4 + len(fver) + len(prop) + 12 + dst_size
+
+    yield (b'FRM8' + struct.pack('>Q', body_size) + b'DSD '
+           + fver + prop
+           + b'DST ' + struct.pack('>Q', dst_size) + frte)
+    for fr in frames:
+        yield _dff_chunk(b'DSTF', fr)
