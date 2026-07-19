@@ -129,12 +129,12 @@ jobs:
           #pragma encoding "utf-8"
           [Setup]
           AppName=Nikon Chinge HiFi Player
-          AppVersion=2.8
+          AppVersion=3.1
           AppPublisher=Nikon Chinge
           DefaultDirName={autopf}\Nikon Chinge HiFi Player
           DefaultGroupName=Nikon Chinge HiFi Player
           OutputDir=dist
-          OutputBaseFilename=NikonChingeHiFiPlayer_Setup_2.8
+          OutputBaseFilename=NikonChingeHiFiPlayer_Setup_3.1
           SetupIconFile=icon.ico
           Compression=lzma2
           SolidCompression=yes
@@ -189,7 +189,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/NikonChingeHiFiPlayer_Setup_2.8.exe
+          path: dist/NikonChingeHiFiPlayer_Setup_3.1.exe
           retention-days: 30
 
   # ── macOS 빌드 (Apple Silicon) ─────────────────────────────────
@@ -327,11 +327,11 @@ jobs:
           hdiutil create -volname "Nikon Chinge HiFi Player" \
             -srcfolder "dist/Nikon Chinge HiFi Player.app" \
             -ov -format UDZO \
-            "dist/NikonChingeHiFiPlayer-2.8-arm64.dmg"
+            "dist/NikonChingeHiFiPlayer-3.1-arm64.dmg"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-arm64
-          path: dist/NikonChingeHiFiPlayer-2.8-arm64.dmg
+          path: dist/NikonChingeHiFiPlayer-3.1-arm64.dmg
           retention-days: 30

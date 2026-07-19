@@ -15,14 +15,63 @@ DSF/DFF(DSD), FLAC, WAV, AIFF, MP3 등 광범위한 포맷 지원
 import sys
 import os
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QEvent
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 
 from player_window import HiFiPlayer
+from constants import APP_VERSION
 
 # 단일 인스턴스 로컬 소켓 이름 (사용자별로 격리)
 _INSTANCE_KEY = f"NikonChingeHiFiPlayer-{os.environ.get('USER') or os.environ.get('USERNAME') or 'default'}"
+
+
+class HiFiApplication(QApplication):
+    """macOS Finder 파일 열기(QFileOpenEvent) 처리용 QApplication.
+
+    macOS는 파일 더블클릭 시 argv가 아니라 Apple Event(QFileOpenEvent)로
+    경로를 전달한다 — 최초 실행/실행 중 양쪽 모두 이 이벤트로 온다.
+    여러 파일을 한꺼번에 열면 이벤트가 파일마다 따로 오므로
+    250ms 동안 모아서(batch) 한 번에 처리한다.
+    """
+
+    def __init__(self, argv):
+        super().__init__(argv)
+        self._open_handler = None    # window.open_files_from_external
+        self._pending_open = []      # 핸들러 준비 전/배치 중 경로 버퍼
+        self._flush_scheduled = False
+
+    def set_open_handler(self, handler):
+        self._open_handler = handler
+        if self._pending_open and not self._flush_scheduled:
+            self._schedule_flush()
+
+    def _schedule_flush(self):
+        self._flush_scheduled = True
+        QTimer.singleShot(250, self._flush_open)
+
+    def _flush_open(self):
+        self._flush_scheduled = False
+        if not self._pending_open:
+            return
+        if self._open_handler is None:
+            return   # 핸들러 등록 시 다시 flush됨
+        paths, self._pending_open = self._pending_open, []
+        try:
+            self._open_handler(paths)
+        except Exception as e:
+            print(f"[FileOpen] 처리 실패: {e}")
+
+    def event(self, e):
+        if e.type() == QEvent.FileOpen:
+            path = e.file()
+            if path:
+                print(f"[FileOpen] macOS 파일 열기 이벤트: {path}")
+                self._pending_open.append(path)
+                if not self._flush_scheduled:
+                    self._schedule_flush()
+            return True
+        return super().event(e)
 
 
 def _audio_paths_from_argv(argv) -> list:
@@ -90,9 +139,9 @@ def main():
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
-    app = QApplication(sys.argv)
+    app = HiFiApplication(sys.argv)
     app.setApplicationName("Nikon Chinge HiFi Music Player")
-    app.setApplicationVersion("1.0")
+    app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("HiFiPlayer")
 
     # 파일 연결/명령행으로 전달된 오디오 파일
@@ -117,6 +166,9 @@ def main():
     window._single_instance_server = _start_instance_server(window)
 
     window.show()
+
+    # macOS Finder 더블클릭(QFileOpenEvent) → 기존 창에서 열기
+    app.set_open_handler(window.open_files_from_external)
 
     # 시작 인자 파일: 이벤트 루프 시작 후 열기 (UI 준비 완료 시점)
     if startup_paths:
