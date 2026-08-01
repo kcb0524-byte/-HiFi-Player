@@ -13,9 +13,11 @@ DSF/DFF(DSD), FLAC, WAV, AIFF, MP3 등 광범위한 포맷 지원
 
 import sys
 import os
+import re
 import json
 import random
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Optional, List
 
@@ -1723,8 +1725,6 @@ class PlaylistDelegate(QStyledItemDelegate):
 
         # ── 배경 ────────────────────────────────────────────
         if is_selected:
-            # 테마 색 기반 선택 표시 (하드코딩 색이 오렌지 테마에서
-            # 배경과 구분되지 않아 선택이 안 보이던 문제 수정)
             bg = QColor(DARK['btn_active'])
         elif is_hover:
             bg = QColor(DARK['btn_hover'])
@@ -1732,7 +1732,7 @@ class PlaylistDelegate(QStyledItemDelegate):
             bg = QColor(DARK['panel2'])
         painter.fillRect(rect, bg)
         if is_selected:
-            # 좌측 액센트 바 — 어느 테마에서도 선택이 또렷하게 보이도록
+            # 좌측 액센트 바 — 선택 상태가 또렷하게 보이도록
             painter.fillRect(rect.left(), rect.top(), 3, rect.height(),
                              QColor(DARK['accent']))
 
@@ -1858,15 +1858,35 @@ class PlaylistDelegate(QStyledItemDelegate):
 # ─────────────────────────────────────────────────────────────
 # 드래그앤드롭 지원 플레이리스트 위젯
 # ─────────────────────────────────────────────────────────────
+def natural_sort_key(path: str):
+    """파일명 자연 정렬 키 — 숫자를 수치로 비교해 "2. 곡" < "10. 곡" 순서 보장.
+
+    사전순 sorted()는 "10. 곡"을 "2. 곡"보다 앞에 놓아 트랙 순번이
+    뒤죽박죽되는 원인이 됨. 한글 파일명은 NFC 정규화(macOS NFD 대응),
+    대소문자 무시. 숫자 토큰은 (0, 수치), 문자 토큰은 (1, 문자열) 튜플로
+    만들어 타입 혼합 비교 오류 없이 안전하게 정렬한다.
+    """
+    name = unicodedata.normalize('NFC', os.path.basename(path))
+    key = []
+    for tok in re.split(r'(\d+)', name):
+        try:
+            key.append((0, int(tok)))
+        except ValueError:
+            key.append((1, tok.casefold()))
+    return key
+
+
 class PlaylistWidget(QListWidget):
     files_dropped    = pyqtSignal(list)
     folder_dropped   = pyqtSignal(str, list)   # (folder_name, paths)
     remove_requested = pyqtSignal(int)          # row 번호
+    remove_rows_requested = pyqtSignal(list)    # 다중 선택 제거 — row 번호 리스트
     clear_requested  = pyqtSignal()
 
     SEP_ROLE   = Qt.UserRole + 2   # "__sep__" 마커
-    SCROLL_ZONE  = 44   # px — 이 범위 안에서 자동 스크롤
-    SCROLL_SPEED = 14   # px / tick
+    SCROLL_ZONE  = 40   # px — 이 범위 안에서 자동 스크롤
+    SCROLL_MIN   = 2    # px/tick — 존 가장자리 (느리게 시작)
+    SCROLL_MAX   = 7    # px/tick — 리스트 끝 (최대 속도)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1876,7 +1896,7 @@ class PlaylistWidget(QListWidget):
         # 내부 드래그 기본 동작을 '이동'으로 강제 (macOS/Windows에서 복사로
         # 제안되어 곡이 복제되던 버그 수정)
         self.setDefaultDropAction(Qt.MoveAction)
-        # 다중 선택 지원: Cmd/Ctrl+클릭(개별), Shift+클릭(범위)
+        # Shift/Ctrl(⌘) 다중 선택 → 여러 곡 한번에 삭제 가능
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
@@ -1891,13 +1911,14 @@ class PlaylistWidget(QListWidget):
 
         # ── 드래그 자동 스크롤 ─────────────────────────
         self._scroll_dir   = 0
+        self._scroll_speed = self.SCROLL_MIN
         self._scroll_timer = QTimer(self)
         self._scroll_timer.setInterval(20)
         self._scroll_timer.timeout.connect(self._do_auto_scroll)
 
     def _do_auto_scroll(self):
         bar = self.verticalScrollBar()
-        bar.setValue(bar.value() + self._scroll_dir * self.SCROLL_SPEED)
+        bar.setValue(bar.value() + self._scroll_dir * self._scroll_speed)
 
     def _stop_scroll(self):
         self._scroll_timer.stop()
@@ -1929,10 +1950,17 @@ class PlaylistWidget(QListWidget):
         h = self.viewport().height()
         if y < self.SCROLL_ZONE:
             self._scroll_dir = -1
+            # 가장자리에 가까울수록 빠르게 — 위치 잡기 쉽도록 비례 감속
+            ratio = 1.0 - max(0, y) / self.SCROLL_ZONE
+            self._scroll_speed = int(self.SCROLL_MIN
+                                     + (self.SCROLL_MAX - self.SCROLL_MIN) * ratio)
             if not self._scroll_timer.isActive():
                 self._scroll_timer.start()
         elif y > h - self.SCROLL_ZONE:
             self._scroll_dir = 1
+            ratio = 1.0 - max(0, h - y) / self.SCROLL_ZONE
+            self._scroll_speed = int(self.SCROLL_MIN
+                                     + (self.SCROLL_MAX - self.SCROLL_MIN) * ratio)
             if not self._scroll_timer.isActive():
                 self._scroll_timer.start()
         else:
@@ -1956,7 +1984,8 @@ class PlaylistWidget(QListWidget):
                 elif self._is_audio(path):
                     loose_files.append(path)
             if loose_files:
-                self.files_dropped.emit(loose_files)
+                # OS가 주는 드롭 순서는 선택 순서라 뒤죽박죽 — 파일명 자연 정렬
+                self.files_dropped.emit(sorted(loose_files, key=natural_sort_key))
             event.acceptProposedAction()
         else:
             # 내부 재정렬: OS가 복사를 제안해도 '이동'으로 강제 (복제 버그 수정)
@@ -1970,8 +1999,9 @@ class PlaylistWidget(QListWidget):
         exts = AudioEngine.SUPPORTED_FORMATS
         for root, dirs, filenames in os.walk(dirpath):
             # 숨김 폴더 제외
-            dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
-            for fname in sorted(filenames):
+            dirs[:] = sorted((d for d in dirs if not d.startswith('.')),
+                             key=natural_sort_key)
+            for fname in sorted(filenames, key=natural_sort_key):
                 # macOS 리소스 포크(._로 시작) 및 숨김 파일 제외
                 if fname.startswith('.') or fname.startswith('._'):
                     continue
@@ -1999,8 +2029,17 @@ class PlaylistWidget(QListWidget):
         item = self.itemAt(pos)
         if item and item.data(self.SEP_ROLE) != "__sep__":
             row = self.row(item)
-            remove_act = QAction("이 트랙 제거", self)
-            remove_act.triggered.connect(lambda: self.remove_requested.emit(row))
+            sel_rows = [self.row(i) for i in self.selectedItems()
+                        if i.data(self.SEP_ROLE) != "__sep__"]
+            if len(sel_rows) > 1 and row in sel_rows:
+                # 다중 선택 위에서 우클릭 → 선택 전체 제거
+                remove_act = QAction(f"선택한 {len(sel_rows)}개 트랙 제거", self)
+                remove_act.triggered.connect(
+                    lambda checked=False, rows=list(sel_rows):
+                        self.remove_rows_requested.emit(rows))
+            else:
+                remove_act = QAction("이 트랙 제거", self)
+                remove_act.triggered.connect(lambda: self.remove_requested.emit(row))
             menu.addAction(remove_act)
         clear_act = QAction("플레이리스트 전체 지우기", self)
         clear_act.triggered.connect(self.clear_requested.emit)
