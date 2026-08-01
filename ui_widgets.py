@@ -1725,12 +1725,16 @@ class PlaylistDelegate(QStyledItemDelegate):
 
         # ── 배경 ────────────────────────────────────────────
         if is_selected:
-            bg = QColor('#1e1a10')
+            bg = QColor(DARK['btn_active'])
         elif is_hover:
             bg = QColor(DARK['btn_hover'])
         else:
             bg = QColor(DARK['panel2'])
         painter.fillRect(rect, bg)
+        if is_selected:
+            # 좌측 액센트 바 — 선택 상태가 또렷하게 보이도록
+            painter.fillRect(rect.left(), rect.top(), 3, rect.height(),
+                             QColor(DARK['accent']))
 
         # 하단 구분선
         painter.setPen(QPen(QColor(DARK['bg']), 1))
@@ -1880,14 +1884,18 @@ class PlaylistWidget(QListWidget):
     clear_requested  = pyqtSignal()
 
     SEP_ROLE   = Qt.UserRole + 2   # "__sep__" 마커
-    SCROLL_ZONE  = 44   # px — 이 범위 안에서 자동 스크롤
-    SCROLL_SPEED = 14   # px / tick
+    SCROLL_ZONE  = 40   # px — 이 범위 안에서 자동 스크롤
+    SCROLL_MIN   = 2    # px/tick — 존 가장자리 (느리게 시작)
+    SCROLL_MAX   = 7    # px/tick — 리스트 끝 (최대 속도)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragDrop)
+        # 내부 드래그 기본 동작을 '이동'으로 강제 (macOS/Windows에서 복사로
+        # 제안되어 곡이 복제되던 버그 수정)
+        self.setDefaultDropAction(Qt.MoveAction)
         # Shift/Ctrl(⌘) 다중 선택 → 여러 곡 한번에 삭제 가능
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1903,13 +1911,14 @@ class PlaylistWidget(QListWidget):
 
         # ── 드래그 자동 스크롤 ─────────────────────────
         self._scroll_dir   = 0
+        self._scroll_speed = self.SCROLL_MIN
         self._scroll_timer = QTimer(self)
         self._scroll_timer.setInterval(20)
         self._scroll_timer.timeout.connect(self._do_auto_scroll)
 
     def _do_auto_scroll(self):
         bar = self.verticalScrollBar()
-        bar.setValue(bar.value() + self._scroll_dir * self.SCROLL_SPEED)
+        bar.setValue(bar.value() + self._scroll_dir * self._scroll_speed)
 
     def _stop_scroll(self):
         self._scroll_timer.stop()
@@ -1941,10 +1950,17 @@ class PlaylistWidget(QListWidget):
         h = self.viewport().height()
         if y < self.SCROLL_ZONE:
             self._scroll_dir = -1
+            # 가장자리에 가까울수록 빠르게 — 위치 잡기 쉽도록 비례 감속
+            ratio = 1.0 - max(0, y) / self.SCROLL_ZONE
+            self._scroll_speed = int(self.SCROLL_MIN
+                                     + (self.SCROLL_MAX - self.SCROLL_MIN) * ratio)
             if not self._scroll_timer.isActive():
                 self._scroll_timer.start()
         elif y > h - self.SCROLL_ZONE:
             self._scroll_dir = 1
+            ratio = 1.0 - max(0, h - y) / self.SCROLL_ZONE
+            self._scroll_speed = int(self.SCROLL_MIN
+                                     + (self.SCROLL_MAX - self.SCROLL_MIN) * ratio)
             if not self._scroll_timer.isActive():
                 self._scroll_timer.start()
         else:
@@ -1972,6 +1988,9 @@ class PlaylistWidget(QListWidget):
                 self.files_dropped.emit(sorted(loose_files, key=natural_sort_key))
             event.acceptProposedAction()
         else:
+            # 내부 재정렬: OS가 복사를 제안해도 '이동'으로 강제 (복제 버그 수정)
+            if event.source() is self:
+                event.setDropAction(Qt.MoveAction)
             super().dropEvent(event)
 
     def _collect_from_dir(self, dirpath: str) -> list:
