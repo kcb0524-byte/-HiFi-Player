@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, spatial ]
   workflow_dispatch:
 
 jobs:
@@ -48,13 +48,15 @@ jobs:
       - name: PyInstaller 빌드
         run: |
           pyinstaller `
-            --name "Nikon Chinge HiFi Player" `
+            --name "Nikon Chinge HiFi Player Spatial" `
             --windowed `
             --icon icon.ico `
             --add-data "constants.py;." `
             --add-data "ui_widgets.py;." `
             --add-data "player_window.py;." `
             --add-data "audio_engine.py;." `
+            --add-data "spatial_audio.py;." `
+            --add-data "spatial_hrir.npz;." `
             --add-data "dsd_decoder.py;." `
             --add-data "sacd_decoder.py;." `
             --add-data "dst_ctypes.py;." `
@@ -97,14 +99,14 @@ jobs:
 
       - name: scipy 테스트 파일 제거 (용량 최적화)
         run: |
-          Get-ChildItem -Path "dist\Nikon Chinge HiFi Player\_internal" -Recurse -Directory -Filter "tests" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path "dist\Nikon Chinge HiFi Player Spatial\_internal" -Recurse -Directory -Filter "tests" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         shell: powershell
 
       - name: 번들 필수 라이브러리 검증 (누락 시 빌드 실패)
         shell: pwsh
         run: |
           # miniaudio 누락으로 무음 앱이 배포됐던 사고 재발 방지 검사
-          $root = "dist/Nikon Chinge HiFi Player"
+          $root = "dist/Nikon Chinge HiFi Player Spatial"
           $checks = [ordered]@{
             "miniaudio 네이티브" = "_miniaudio*"
             "libsndfile"         = "libsndfile*"
@@ -128,13 +130,13 @@ jobs:
           $iss = @"
           #pragma encoding "utf-8"
           [Setup]
-          AppName=Nikon Chinge HiFi Player
-          AppVersion=3.1
+          AppName=Nikon Chinge HiFi Player Spatial
+          AppVersion=1.7.1
           AppPublisher=Nikon Chinge
-          DefaultDirName={autopf}\Nikon Chinge HiFi Player
-          DefaultGroupName=Nikon Chinge HiFi Player
+          DefaultDirName={autopf}\Nikon Chinge HiFi Player Spatial
+          DefaultGroupName=Nikon Chinge HiFi Player Spatial
           OutputDir=dist
-          OutputBaseFilename=NikonChingeHiFiPlayer_Setup_3.1
+          OutputBaseFilename=NikonChingeHiFiPlayerSpatial_Setup_1.7.1
           SetupIconFile=icon.ico
           Compression=lzma2
           SolidCompression=yes
@@ -148,36 +150,36 @@ jobs:
           Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional tasks:"
 
           [Files]
-          Source: "dist\Nikon Chinge HiFi Player\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          Source: "dist\Nikon Chinge HiFi Player Spatial\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
-          Name: "{group}\Nikon Chinge HiFi Player"; Filename: "{app}\Nikon Chinge HiFi Player.exe"
+          Name: "{group}\Nikon Chinge HiFi Player Spatial"; Filename: "{app}\Nikon Chinge HiFi Player Spatial.exe"
           Name: "{group}\Uninstall"; Filename: "{uninstallexe}"
-          Name: "{autodesktop}\Nikon Chinge HiFi Player"; Filename: "{app}\Nikon Chinge HiFi Player.exe"; Tasks: desktopicon
+          Name: "{autodesktop}\Nikon Chinge HiFi Player Spatial"; Filename: "{app}\Nikon Chinge HiFi Player Spatial.exe"; Tasks: desktopicon
 
           [Run]
-          Filename: "{app}\Nikon Chinge HiFi Player.exe"; Description: "Launch Nikon Chinge HiFi Player"; Flags: nowait postinstall skipifsilent
+          Filename: "{app}\Nikon Chinge HiFi Player Spatial.exe"; Description: "Launch Nikon Chinge HiFi Player Spatial"; Flags: nowait postinstall skipifsilent
 
           [Registry]
-          Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile"; ValueType: string; ValueName: ""; ValueData: "Audio File"; Flags: uninsdeletekey
-          Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Nikon Chinge HiFi Player.exe,0"
-          Root: HKCR; Subkey: "NikonChingeHiFiPlayer.AudioFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Nikon Chinge HiFi Player.exe"" ""%1"""
-          Root: HKCR; Subkey: ".flac\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".wav\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".aiff\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".aif\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".mp3\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".m4a\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".aac\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".ogg\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".opus\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".wv\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".ape\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".tta\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".wma\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".dsf\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".dff\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".iso\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueType: string; ValueName: ""; ValueData: "Audio File"; Flags: uninsdeletekey
+          Root: HKCR; Subkey: "NikonChingeHiFiPlayerSpatial.AudioFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Nikon Chinge HiFi Player Spatial.exe,0"
+          Root: HKCR; Subkey: "NikonChingeHiFiPlayerSpatial.AudioFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Nikon Chinge HiFi Player Spatial.exe"" ""%1"""
+          Root: HKCR; Subkey: ".flac\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wav\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aiff\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aif\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".mp3\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".m4a\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aac\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".ogg\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".opus\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wv\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".ape\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".tta\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wma\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".dsf\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".dff\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".iso\OpenWithProgids"; ValueType: string; ValueName: "NikonChingeHiFiPlayerSpatial.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
           "@
           [System.IO.File]::WriteAllText("$PWD\installer_win.iss", $iss, [System.Text.UTF8Encoding]::new($true))
         shell: powershell
@@ -189,7 +191,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/NikonChingeHiFiPlayer_Setup_3.1.exe
+          path: dist/NikonChingeHiFiPlayerSpatial_Setup_1.7.1.exe
           retention-days: 30
 
   # ── macOS 빌드 (Apple Silicon) ─────────────────────────────────
@@ -224,14 +226,16 @@ jobs:
       - name: PyInstaller 빌드
         run: |
           pyinstaller \
-            --name "Nikon Chinge HiFi Player" \
+            --name "Nikon Chinge HiFi Player Spatial" \
             --windowed \
             --icon icon.icns \
-            --osx-bundle-identifier com.twsemicon.hifi-player \
+            --osx-bundle-identifier com.twsemicon.hifi-player-spatial \
             --add-data "constants.py:." \
             --add-data "ui_widgets.py:." \
             --add-data "player_window.py:." \
             --add-data "audio_engine.py:." \
+            --add-data "spatial_audio.py:." \
+            --add-data "spatial_hrir.npz:." \
             --add-data "dsd_decoder.py:." \
             --add-data "sacd_decoder.py:." \
             --add-data "dst_ctypes.py:." \
@@ -268,13 +272,13 @@ jobs:
 
       - name: scipy 테스트 파일 제거
         run: |
-          find "dist/Nikon Chinge HiFi Player.app" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find "dist/Nikon Chinge HiFi Player.app" -name "*.pyx" -delete 2>/dev/null || true
-          find "dist/Nikon Chinge HiFi Player.app" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find "dist/Nikon Chinge HiFi Player Spatial.app" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find "dist/Nikon Chinge HiFi Player Spatial.app" -name "*.pyx" -delete 2>/dev/null || true
+          find "dist/Nikon Chinge HiFi Player Spatial.app" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
       - name: Info.plist 파일 연결(CFBundleDocumentTypes) 등록
         run: |
-          python3 - "dist/Nikon Chinge HiFi Player.app/Contents/Info.plist" <<'PYEOF'
+          python3 - "dist/Nikon Chinge HiFi Player Spatial.app/Contents/Info.plist" <<'PYEOF'
           import sys, plistlib
           plist_path = sys.argv[1]
           with open(plist_path, 'rb') as f:
@@ -298,13 +302,13 @@ jobs:
           PYEOF
 
       - name: ffmpeg 번들 포함
-        run: cp $(which ffmpeg) "dist/Nikon Chinge HiFi Player.app/Contents/MacOS/ffmpeg"
+        run: cp $(which ffmpeg) "dist/Nikon Chinge HiFi Player Spatial.app/Contents/MacOS/ffmpeg"
 
       - name: 번들 필수 라이브러리 검증 (누락 시 빌드 실패)
         run: |
           # miniaudio 누락으로 무음 앱이 배포됐던 사고 재발 방지 검사
           # (macOS 재생 장치는 miniaudio 기반 — 없으면 재생 상태만 되고 무음)
-          APP="dist/Nikon Chinge HiFi Player.app"
+          APP="dist/Nikon Chinge HiFi Player Spatial.app"
           fail=0
           for pat in "_miniaudio*" "libsndfile*" "libportaudio*" "ffmpeg"; do
             hit=$(find "$APP" -name "$pat" | head -1)
@@ -320,18 +324,18 @@ jobs:
       - name: Ad-hoc 코드사이닝
         run: |
           codesign --force --deep --sign - \
-            "dist/Nikon Chinge HiFi Player.app" || true
+            "dist/Nikon Chinge HiFi Player Spatial.app" || true
 
       - name: DMG 생성
         run: |
-          hdiutil create -volname "Nikon Chinge HiFi Player" \
-            -srcfolder "dist/Nikon Chinge HiFi Player.app" \
+          hdiutil create -volname "Nikon Chinge HiFi Player Spatial" \
+            -srcfolder "dist/Nikon Chinge HiFi Player Spatial.app" \
             -ov -format UDZO \
-            "dist/NikonChingeHiFiPlayer-3.1-arm64.dmg"
+            "dist/NikonChingeHiFiPlayerSpatial-1.7.1-arm64.dmg"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-arm64
-          path: dist/NikonChingeHiFiPlayer-3.1-arm64.dmg
+          path: dist/NikonChingeHiFiPlayerSpatial-1.7.1-arm64.dmg
           retention-days: 30

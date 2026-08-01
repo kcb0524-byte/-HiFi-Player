@@ -48,6 +48,12 @@ except ImportError:
 from dsd_decoder import DSDDecoder
 from sacd_decoder import SACDDecoder
 
+try:
+    from spatial_audio import SpatialProcessor
+    SPATIAL_AVAILABLE = True
+except ImportError:
+    SPATIAL_AVAILABLE = False
+
 # ─────────────────────────────────────────────
 # CoreAudio 독점 모드 (macOS 전용)
 # ─────────────────────────────────────────────
@@ -320,110 +326,6 @@ def _pack_dop(dsd_bits: np.ndarray, marker_toggle: list) -> np.ndarray:
     return (out.astype(np.float32) / 8388608.0)
 
 
-# ─────────────────────────────────────────────
-# MP3 구조대 헬퍼 — ID3 안전 제거 + 진단 로그
-# ─────────────────────────────────────────────
-def _mp3_frame_len(d: bytes, i: int) -> int:
-    """MPEG Layer III 프레임 헤더 검증. 유효하면 프레임 길이(bytes), 아니면 0.
-
-    CRC 보호 프레임(fffa)·MPEG2/2.5 저샘플레이트도 인식한다.
-    """
-    if i + 4 > len(d) or d[i] != 0xFF or (d[i+1] & 0xE0) != 0xE0:
-        return 0
-    ver   = (d[i+1] >> 3) & 3   # 0=MPEG2.5, 2=MPEG2, 3=MPEG1
-    layer = (d[i+1] >> 1) & 3   # 1=Layer III
-    br    = (d[i+2] >> 4) & 15
-    srx   = (d[i+2] >> 2) & 3
-    pad   = (d[i+2] >> 1) & 1
-    if ver == 1 or layer != 1 or br in (0, 15) or srx == 3:
-        return 0
-    BR_V1 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
-    BR_V2 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
-    SR    = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
-    bitrate = (BR_V1[br] if ver == 3 else BR_V2[br]) * 1000
-    sr      = SR[ver][srx]
-    if not bitrate or not sr:
-        return 0
-    spf = 1152 if ver == 3 else 576   # samples per frame (Layer III)
-    return (spf // 8) * bitrate // sr + pad
-
-
-def _mp3_strip_to_file(src: str, dst: str):
-    """ID3v2 태그·앞쪽 쓰레기·ID3v1 트레일러를 제거한 순수 MPEG 스트림을 dst에 기록.
-
-    첫 프레임은 '해당 프레임 길이만큼 뒤에 또 유효 헤더가 있는지'로 검증해
-    가짜 sync(0xFFEx 우연 일치)를 걸러낸다.
-    반환: (첫 유효 프레임 오프셋, ID3v2 태그 끝 오프셋)
-    """
-    with open(src, 'rb') as f:
-        d = f.read()
-    off = 0
-    if d[:3] == b'ID3' and len(d) > 10:
-        off = ((d[6] << 21) | (d[7] << 14) | (d[8] << 7) | d[9]) + 10
-        if d[5] & 0x10:   # footer 플래그
-            off += 10
-        off = min(off, len(d))
-    # 첫 검증된 프레임 탐색 (태그 크기가 깨진 경우 대비, 최대 3MB 스캔)
-    i = off
-    limit = min(len(d), off + 3_000_000)
-    while i < limit:
-        L = _mp3_frame_len(d, i)
-        if L and (_mp3_frame_len(d, i + L) or i + L >= len(d) - 128):
-            break
-        i += 1
-    if i >= limit:
-        # 태그 오프셋이 깨졌을 가능성 → 파일 처음부터 재탐색
-        i = 0
-        while i < min(len(d), 3_000_000):
-            L = _mp3_frame_len(d, i)
-            if L and _mp3_frame_len(d, i + L):
-                break
-            i += 1
-        if i >= min(len(d), 3_000_000):
-            raise ValueError("유효한 MPEG 프레임을 찾지 못함")
-    end = len(d) - 128 if d[-128:-125] == b'TAG' else len(d)
-    with open(dst, 'wb') as f:
-        f.write(d[i:end])
-    return i, off
-
-
-def _mp3_log_path() -> str:
-    """플랫폼별 진단 로그 파일 경로 (원격 진단용 — 사용자가 이 파일을 보내면 됨)"""
-    import tempfile
-    try:
-        if _IS_WIN:
-            base = os.path.join(os.environ.get('LOCALAPPDATA', tempfile.gettempdir()),
-                                'NikonChingeHiFiPlayer', 'logs')
-        elif _IS_MAC:
-            base = os.path.expanduser('~/Library/Logs/NikonChingeHiFiPlayer')
-        else:
-            base = os.path.expanduser('~/.local/share/NikonChingeHiFiPlayer/logs')
-        os.makedirs(base, exist_ok=True)
-        return os.path.join(base, 'mp3_decode.log')
-    except Exception:
-        return os.path.join(tempfile.gettempdir(), 'ncmp_mp3_decode.log')
-
-
-def _mp3_write_log(filepath: str, stages: list) -> str:
-    """MP3 폴백 진행/실패 내역을 로그 파일에 append. 반환: 로그 경로"""
-    import datetime
-    logp = _mp3_log_path()
-    try:
-        with open(logp, 'a', encoding='utf-8') as f:
-            f.write(f"\n[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {filepath}\n")
-            try:
-                f.write(f"  파일 크기: {os.path.getsize(filepath)} bytes\n")
-            except Exception:
-                pass
-            f.write(f"  플랫폼: {platform.system()} / 번들: "
-                    f"{getattr(sys, '_MEIPASS', '아님(소스 실행)')}\n")
-            for s in stages:
-                f.write(f"  - {s}\n")
-    except Exception:
-        pass
-    return logp
-
-
 class AudioDevice:
     def __init__(self, index, name, max_output_channels, default_samplerate, hostapi_name=''):
         self.index = index
@@ -468,6 +370,8 @@ class AudioEngine:
         # ── HiFi 출력 품질 옵션 ──
         self._bit_perfect: bool = False      # True: EQ/RG/볼륨 완전 bypass, 원본 그대로 DAC로
         self._dither_enabled: bool = True    # TPDF 디더링 (float64→float32 변환 시)
+        self._spatial_enabled: bool = False  # 공간 음향 (크로스피드 바이노럴, 스테레오 전용)
+        self._spatial_mode: str = 'strong'   # 'natural' | 'strong' | 'wide'
         self._fixed_output_sr: int = 0       # 0=파일 SR 그대로, >0=강제 업샘플링 SR
         self._upsample_quality: int = 32     # resample_poly window 품질 (높을수록 정밀)
 
@@ -706,16 +610,8 @@ class AudioEngine:
                 r'C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe',
             ]
 
-        # PyInstaller 6+ onedir: 데이터 파일은 exe 옆이 아니라 _internal/(sys._MEIPASS)에 있음
-        _meipass = getattr(sys, '_MEIPASS', None)
-        _meipass_paths = []
-        if _meipass:
-            _meipass_paths = [os.path.join(_meipass, 'ffmpeg.exe'),
-                              os.path.join(_meipass, 'ffmpeg')]
-
         ffmpeg_bin = None
         for candidate in [
-            *_meipass_paths,
             _bundle_ffmpeg_win,
             _bundle_ffmpeg_mac,
             shutil.which('ffmpeg'),
@@ -858,83 +754,6 @@ class AudioEngine:
         data = raw.reshape(-1, channels)
         return data, srate
 
-    # ─────────────────────────────────────────────
-    # MP3 구조대 — 구형/손상 MP3 폴백 체인
-    # (soundfile이 거부한 .mp3 전용; 정상 재생 경로에는 영향 없음)
-    # ─────────────────────────────────────────────
-    def _load_mp3_fallback(self, filepath: str, first_error: str = ''):
-        """soundfile이 실패한 MP3 를 3단계로 구조:
-          A) ID3v2/쓰레기 구간 제거본(ASCII 임시경로) → soundfile 재시도
-             — 대형 앨범아트, 깨진 태그, 태그-프레임 사이 쓰레기 대응
-             — 임시 파일명이 ASCII라 Windows 한글/특수문자 경로 문제도 함께 회피
-          B) miniaudio 내장 MP3 디코더 (subprocess 불필요 — ffmpeg 없는 환경 대응)
-          C) ffmpeg subprocess (최후 수단)
-        전부 실패 시 단계별 사유를 로그 파일로 남기고 예외 발생
-        """
-        import tempfile
-        stages = [f"soundfile 1차: {first_error or '실패'}"]
-        tmp = None
-        try:
-            # ── A단계: ID3 안전 제거본 생성 → soundfile ──────────
-            try:
-                fd, tmp = tempfile.mkstemp(prefix='ncmp_mp3_', suffix='.mp3')
-                os.close(fd)
-                first, tag_end = _mp3_strip_to_file(filepath, tmp)
-                stages.append(f"A: ID3 제거 (태그끝={tag_end}, 첫 유효프레임={first})")
-                try:
-                    data, srate = sf.read(tmp, dtype='float64', always_2d=True)
-                    print(f"[Audio] MP3 구조대 A단계(ID3 제거+soundfile) 성공")
-                    _mp3_write_log(filepath, stages + ["→ A단계 성공"])
-                    return data, srate
-                except Exception as e:
-                    stages.append(f"A 실패: {e}")
-            except Exception as e:
-                stages.append(f"A(ID3 제거) 자체 실패: {e}")
-
-            # ── B단계: miniaudio 내장 MP3 디코더 ────────────────
-            if MA_AVAILABLE:
-                for src, label in ((tmp, 'B(제거본)'), (filepath, 'B(원본)')):
-                    if not src or not os.path.isfile(src) or os.path.getsize(src) == 0:
-                        continue
-                    try:
-                        dec = miniaudio.mp3_read_file_f32(src)
-                        if dec.nchannels <= 0 or dec.sample_rate <= 0:
-                            raise ValueError(f"비정상 디코드 결과 ch={dec.nchannels} sr={dec.sample_rate}")
-                        raw  = np.asarray(dec.samples, dtype=np.float64)
-                        data = raw.reshape(-1, dec.nchannels)
-                        print(f"[Audio] MP3 구조대 {label} miniaudio 성공 "
-                              f"({dec.sample_rate}Hz {dec.nchannels}ch)")
-                        _mp3_write_log(filepath, stages + [f"→ {label} miniaudio 성공"])
-                        return data, dec.sample_rate
-                    except Exception as e:
-                        stages.append(f"{label} miniaudio 실패: {e}")
-            else:
-                stages.append("B: miniaudio 미설치 — 건너뜀")
-
-            # ── C단계: ffmpeg subprocess ────────────────────────
-            for src, label in ((tmp, 'C(제거본)'), (filepath, 'C(원본)')):
-                if not src or not os.path.isfile(src) or os.path.getsize(src) == 0:
-                    continue
-                try:
-                    data, srate = self._load_pcm_via_ffmpeg(src)
-                    print(f"[Audio] MP3 구조대 {label} ffmpeg 성공")
-                    _mp3_write_log(filepath, stages + [f"→ {label} ffmpeg 성공"])
-                    return data, srate
-                except Exception as e:
-                    stages.append(f"{label} ffmpeg 실패: {e}")
-
-            # ── 전부 실패: 진단 로그 남기고 예외 ────────────────
-            logp = _mp3_write_log(filepath, stages + ["→ 모든 단계 실패"])
-            raise RuntimeError(
-                f"MP3 디코딩 실패 (soundfile→ID3제거→miniaudio→ffmpeg 모두 실패). "
-                f"진단 로그: {logp}")
-        finally:
-            if tmp:
-                try:
-                    os.unlink(tmp)
-                except Exception:
-                    pass
-
     def _load_pcm(self, filepath: str) -> dict:
         if not SF_AVAILABLE:
             raise RuntimeError("soundfile 없음")
@@ -954,14 +773,9 @@ class AudioEngine:
                 # float64로 로드 — EQ 연산 정밀도 확보
                 data, srate = sf.read(filepath, dtype='float64', always_2d=True)
             except Exception as e:
-                if ext == 'mp3':
-                    # 구형/손상 MP3: 구조대 체인 (ID3 제거 → miniaudio → ffmpeg)
-                    print(f"[Audio] soundfile 실패 ({e}), MP3 구조대 시도...")
-                    data, srate = self._load_mp3_fallback(filepath, str(e))
-                else:
-                    # soundfile 실패 시 ffmpeg로 재시도
-                    print(f"[Audio] soundfile 실패 ({e}), ffmpeg 폴백 시도...")
-                    data, srate = self._load_pcm_via_ffmpeg(filepath)
+                # soundfile 실패 시 ffmpeg로 재시도
+                print(f"[Audio] soundfile 실패 ({e}), ffmpeg 폴백 시도...")
+                data, srate = self._load_pcm_via_ffmpeg(filepath)
         # 피크 레벨 확인 및 정규화
         peak = np.abs(data).max()
         if peak > 1.0:
@@ -1000,7 +814,9 @@ class AudioEngine:
         self._rg_album_db = info.get('rg_album_db')
 
         # 1. 항상 이 트랙의 RMS 기반 Auto 게인 계산 (태그 없을 때 폴백 및 Album Auto 캐시용)
-        auto_gain = self._calc_rg_gain(data, self._rg_target)
+        #    기준 -18 LUFS로 계산해 저장 — 실제 Target 보정은 _apply_rg_gain에서
+        #    (self._rg_target + 18) 델타로 적용하므로, Target 변경 시 즉시 반영 가능
+        auto_gain = self._calc_rg_gain(data, -18.0)
         self._current_auto_gain = auto_gain
 
         # 2. 현재 폴더 = 앨범 키 (Album Auto 모드에서 폴더별 동일 게인 적용)
@@ -1290,9 +1106,11 @@ class AudioEngine:
         self._rg_enabled = enabled
 
     def set_rg_target(self, target_db: float):
-        """RG 목표 라우드니스 설정 (-18 ~ -10 dB). 타겟 변경 시 Album Auto 캐시 무효화."""
+        """RG 목표 라우드니스 설정 (-18 ~ -10 dB).
+        캐시/Auto 게인은 -18 기준으로 저장되므로 무효화 불필요 —
+        _apply_rg_gain()을 즉시 호출해 재생 중인 곡에도 바로 반영한다."""
         self._rg_target = float(target_db)
-        self._album_gain_cache.clear()  # 타겟 바뀌면 기존 Auto 계산값 무효화
+        self._apply_rg_gain()  # 재생 중 즉시 반영
 
     def set_rg_mode(self, mode: str) -> str:
         """RG 모드 설정: 'track' 또는 'album'. 현재 트랙에 즉시 적용. 표시 문자열 반환."""
@@ -1305,39 +1123,46 @@ class AudioEngine:
         태그 없을 때:
           Track 모드 → 이 트랙의 개별 RMS Auto 게인 (곡마다 다른 값)
           Album 모드 → 폴더 첫 곡 RMS를 대표값으로 폴더 내 모든 곡 동일 게인 적용"""
+        # Target 보정 델타: RG 태그/Auto 기준값은 모두 -18 LUFS 기준
+        # → Target이 -18이면 델타 0, -10이면 +8 dB 부스트
+        delta = self._rg_target + 18.0
+
+        def _final(db):
+            """기준 게인(dB) + Target 델타 적용, ±12 dB 클램프 후 선형 게인"""
+            eff = max(-12.0, min(12.0, db + delta))
+            return float(10.0 ** (eff / 20.0)), eff
+
         if self._rg_mode == 'album':
             if self._rg_album_db is not None:
-                # Album 태그 있음 → 태그 사용
-                self._rg_gain = float(10.0 ** (self._rg_album_db / 20.0))
-                self._rg_source = f'Album ({self._rg_album_db:+.1f} dB)'
+                # Album 태그 있음 → 태그 + Target 델타
+                self._rg_gain, eff = _final(self._rg_album_db)
+                self._rg_source = f'Album ({eff:+.1f} dB)'
             else:
-                # Album 태그 없음 → 폴더 기준 Auto (폴더 첫 곡 RMS 대표값)
+                # Album 태그 없음 → 폴더 기준 Auto (폴더 첫 곡 RMS 대표값, -18 기준 저장)
                 folder_gain = self._album_gain_cache.get(self._current_folder)
+                if folder_gain is None and data is not None:
+                    folder_gain = self._calc_rg_gain(data, -18.0)
+                    self._album_gain_cache[self._current_folder] = folder_gain
                 if folder_gain is not None:
-                    self._rg_gain = folder_gain
-                    gain_db = 20.0 * np.log10(max(folder_gain, 1e-9))
-                    self._rg_source = f'Album Auto ({gain_db:+.1f} dB)'
-                elif data is not None:
-                    # Fallback: 데이터로 직접 계산
-                    self._rg_gain = self._calc_rg_gain(data, self._rg_target)
-                    self._album_gain_cache[self._current_folder] = self._rg_gain
-                    gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
-                    self._rg_source = f'Album Auto ({gain_db:+.1f} dB)'
+                    base_db = 20.0 * np.log10(max(folder_gain, 1e-9))
+                    self._rg_gain, eff = _final(base_db)
+                    self._rg_source = f'Album Auto ({eff:+.1f} dB)'
                 # 캐시도 없고 데이터도 없으면 현재 게인 유지
         else:  # track mode
             if self._rg_track_db is not None:
-                # Track 태그 있음 → 태그 사용
-                self._rg_gain = float(10.0 ** (self._rg_track_db / 20.0))
-                self._rg_source = f'Track ({self._rg_track_db:+.1f} dB)'
+                # Track 태그 있음 → 태그 + Target 델타
+                self._rg_gain, eff = _final(self._rg_track_db)
+                self._rg_source = f'Track ({eff:+.1f} dB)'
             elif self._current_auto_gain > 0:
-                # Track 태그 없음 → 이 트랙의 개별 RMS Auto (곡마다 다른 값)
-                self._rg_gain = self._current_auto_gain
-                gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
-                self._rg_source = f'Track Auto ({gain_db:+.1f} dB)'
+                # Track 태그 없음 → 이 트랙의 개별 RMS Auto (-18 기준 저장값 + 델타)
+                base_db = 20.0 * np.log10(max(self._current_auto_gain, 1e-9))
+                self._rg_gain, eff = _final(base_db)
+                self._rg_source = f'Track Auto ({eff:+.1f} dB)'
             elif data is not None:
-                self._rg_gain = self._calc_rg_gain(data, self._rg_target)
-                gain_db = 20.0 * np.log10(max(self._rg_gain, 1e-9))
-                self._rg_source = f'Track Auto ({gain_db:+.1f} dB)'
+                base = self._calc_rg_gain(data, -18.0)
+                base_db = 20.0 * np.log10(max(base, 1e-9))
+                self._rg_gain, eff = _final(base_db)
+                self._rg_source = f'Track Auto ({eff:+.1f} dB)'
             # else: 현재 게인 유지
 
     # ─────────────────────────────────────────────
@@ -1626,8 +1451,12 @@ class AudioEngine:
         _eq_zi: Optional[np.ndarray] = None   # (n_bands, out_ch, 2)
         _eq_sos_cached: Optional[np.ndarray] = None
 
+        # 공간 음향 프로세서 — generator 생애 동안 유지 (청크 경계 상태 연속)
+        _spatial_proc = None
+
         while True:
             n = max(frames or 512, min_chunk)
+            _did_51 = False   # 이번 청크가 5.1 채널별 렌더링을 거쳤는지
 
             # ─── fade-out 처리: transitioning 직전 프레임들을 부드럽게 fade ───
             with self._lock:
@@ -1699,7 +1528,26 @@ class AudioEngine:
                 else:
                     _finished_fired[0] = False
                     do_fire = False
-                    chunk = self._fix_channels(chunk, out_ch).astype(np.float64)
+                    _did_51 = False
+                    _raw = np.asarray(chunk)
+                    # ── 진짜 5.1(6ch) 소스 + 3D 모드: 채널별 HRIR 바이노럴 렌더링 ──
+                    if (_raw.ndim == 2 and _raw.shape[1] >= 6 and out_ch == 2
+                            and self._spatial_enabled and self._spatial_mode == '3d'
+                            and SPATIAL_AVAILABLE and not self._bit_perfect):
+                        if (_spatial_proc is None or _spatial_proc.sample_rate != sr
+                                or _spatial_proc.mode != '3d'):
+                            try:
+                                _spatial_proc = SpatialProcessor(sr, '3d')
+                            except Exception:
+                                _spatial_proc = None
+                        if _spatial_proc is not None:
+                            try:
+                                chunk = _spatial_proc.process_51(_raw.astype(np.float64))
+                                _did_51 = True
+                            except Exception:
+                                pass
+                    if not _did_51:
+                        chunk = self._fix_channels(chunk, out_ch).astype(np.float64)
                     actual = len(chunk)
                     if self._is_dsd:
                         self._dsd_position += actual
@@ -1765,6 +1613,27 @@ class AudioEngine:
                         chunk, _eq_zi = AudioEngine._apply_eq_sos(cur_sos, chunk, _eq_zi)
                     except Exception:
                         pass
+
+            # ── 공간 음향 (크로스피드 바이노럴, float64 유지) ──
+            # (5.1 소스가 이미 채널별 렌더링된 경우는 재적용하지 않음)
+            if (self._spatial_enabled and out_ch == 2 and SPATIAL_AVAILABLE
+                    and not _did_51):
+                if (_spatial_proc is None or _spatial_proc.sample_rate != sr
+                        or _spatial_proc.mode != self._spatial_mode):
+                    try:
+                        _spatial_proc = SpatialProcessor(sr, self._spatial_mode)
+                    except Exception:
+                        _spatial_proc = None
+                if _spatial_proc is not None:
+                    try:
+                        chunk = _spatial_proc.process(chunk)
+                    except Exception:
+                        pass
+            elif not self._spatial_enabled and _spatial_proc is not None:
+                # 토글이 실제로 꺼졌을 때만 상태 폐기
+                # (5.1 렌더링(_did_51) 청크에서 폐기하면 매 청크 재생성 루프가
+                #  발생해 버퍼 언더런 잡음("다다닥")이 나는 버그가 있었음)
+                _spatial_proc = None
 
             # ── 볼륨 + ReplayGain 적용 (float64) ──
             _vol = self._volume * (self._rg_gain if self._rg_enabled else 1.0)
@@ -1848,7 +1717,21 @@ class AudioEngine:
         if ch < out_ch:
             chunk = np.repeat(chunk, out_ch // max(ch, 1), axis=1)[:, :out_ch]
         elif ch > out_ch:
-            chunk = chunk[:, :out_ch]
+            if ch >= 6 and out_ch == 2:
+                # 5.1 → 스테레오 ITU-R BS.775 다운믹스
+                # (기존: 앞 2채널만 남기고 센터/리어/LFE를 버리던 문제 수정)
+                # FLAC 채널 순서: FL FR FC LFE BL BR
+                fl, fr = chunk[:, 0], chunk[:, 1]
+                fc, lfe = chunk[:, 2], chunk[:, 3]
+                bl, br = chunk[:, 4], chunk[:, 5]
+                g = 0.7071
+                l = fl + g * fc + g * bl + 0.5 * lfe
+                r = fr + g * fc + g * br + 0.5 * lfe
+                # 클리핑 여유 (최악 합산 대비)
+                s = 1.0 / (1.0 + g + g + 0.5)
+                chunk = np.stack([l, r], axis=1) * (s * 2.0)
+            else:
+                chunk = chunk[:, :out_ch]
         return chunk
 
     def _fire_finished(self):
@@ -1869,6 +1752,17 @@ class AudioEngine:
     def set_dither_enabled(self, enabled: bool):
         """TPDF 디더링 on/off"""
         self._dither_enabled = enabled
+
+    def set_spatial_enabled(self, enabled: bool):
+        """공간 음향 (크로스피드 바이노럴) on/off — 비트퍼펙트/DoP 모드에서는 미적용"""
+        self._spatial_enabled = enabled and SPATIAL_AVAILABLE
+        print(f"[HiFi] 공간 음향 {'ON' if self._spatial_enabled else 'OFF'}")
+
+    def set_spatial_mode(self, mode: str):
+        """공간 음향 강도: 'natural'(은은) | 'strong'(뚜렷) | 'wide'(넓은 무대)"""
+        if mode in ('natural', 'strong', 'wide', '3d'):
+            self._spatial_mode = mode
+            print(f"[HiFi] 공간 음향 모드: {mode}")
 
     def set_fixed_output_sr(self, sr: int):
         """출력 샘플레이트 고정 (0=파일 SR 그대로). 변경 시 현재 파일 재로드 필요."""

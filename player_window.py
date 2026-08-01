@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QComboBox, QFrame, QSplitter, QProgressBar,
     QToolButton, QSizePolicy, QMenu, QAction, QAbstractItemView,
     QMessageBox, QStyle, QGridLayout, QScrollArea, QCheckBox,
-    QStackedWidget, QStyledItemDelegate, QProxyStyle,
+    QStackedWidget, QStyledItemDelegate,
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QThread, pyqtSignal, QUrl, QSize, QMimeData,
@@ -42,34 +42,12 @@ from sacd_decoder import SACDDecoder
 from upnp_browser import UPnPDialog
 
 
-from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET, APP_VERSION
+from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET
 from ui_widgets import (
     TrackLoader, MarqueeLabel, CDWidget, EQGraph, PresetPanel, EQPanel,
     ToggleSwitch, TransportButton, IconButton, VUMeter,
     TrackItem, PlaylistDelegate, PlaylistHeader, PlaylistWidget,
-    natural_sort_key,
 )
-
-
-class ClickJumpSliderStyle(QProxyStyle):
-    """슬라이더 홈(groove) 클릭 시 핸들이 클릭 지점으로 바로 점프하는 스타일.
-
-    macOS 기본 스타일은 원래 이 동작이지만, Windows 기본 스타일은
-    클릭 시 페이지 스텝만 이동해서 시크/볼륨 클릭이 클릭 위치로 가지 않음.
-    SH_Slider_AbsoluteSetButtons에 왼쪽 버튼을 지정해 전 플랫폼 동작을 통일한다.
-    """
-    def styleHint(self, hint, option=None, widget=None, returnData=None):
-        if hint == QStyle.SH_Slider_AbsoluteSetButtons:
-            return int(Qt.LeftButton)
-        return super().styleHint(hint, option, widget, returnData)
-
-
-def _apply_click_jump(slider: QSlider):
-    """슬라이더에 클릭-점프 스타일 적용 (proxy 수명은 슬라이더에 귀속)"""
-    proxy = ClickJumpSliderStyle(slider.style().objectName())
-    proxy.setParent(slider)   # QWidget.setStyle은 소유권을 갖지 않으므로 부모로 수명 관리
-    slider.setStyle(proxy)
-
 
 class HiFiPlayer(QMainWindow):
     _position_signal = pyqtSignal(float, float)
@@ -177,7 +155,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle(f"Nikon Chinge HiFi Music Player v{APP_VERSION}")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.1")
         self.setMinimumSize(920, 900)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -328,13 +306,6 @@ class HiFiPlayer(QMainWindow):
         self.lbl_detail2.hide()
         spec_vlay.addWidget(self.lbl_detail2)
 
-        # Now Playing 초기화용 기본 스타일 스냅샷 (재생 중 트랙 삭제 시 복원)
-        self._np_default_styles = {
-            'format':  self.lbl_format.styleSheet(),
-            'detail':  self.lbl_detail.styleSheet(),
-            'detail2': self.lbl_detail2.styleSheet(),
-        }
-
         lay.addWidget(spec_container)
         lay.addSpacing(6)
 
@@ -354,7 +325,6 @@ class HiFiPlayer(QMainWindow):
         self.seek_slider = QSlider(Qt.Horizontal)
         self.seek_slider.setRange(0, 1000)
         self.seek_slider.setValue(0)
-        _apply_click_jump(self.seek_slider)   # Windows에서도 클릭 지점으로 즉시 점프
         self.seek_slider.sliderPressed.connect(self._on_seek_pressed)
         self.seek_slider.sliderReleased.connect(self._on_seek_released)
 
@@ -427,7 +397,6 @@ class HiFiPlayer(QMainWindow):
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(80)
         self.vol_slider.setToolTip("볼륨")
-        _apply_click_jump(self.vol_slider)    # Windows에서도 클릭 지점으로 즉시 점프
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
         self.engine.set_volume(0.8)
 
@@ -557,6 +526,43 @@ class HiFiPlayer(QMainWindow):
         self.toggle_dop = ToggleSwitch(checked=False)
         self.toggle_dop.toggled.connect(self._on_dop_toggled)
         lay.addLayout(_opt_row("DoP Mode", "DSD over PCM (DAC 지원 필요)", self.toggle_dop))
+        lay.addSpacing(4)
+
+        self.toggle_spatial = ToggleSwitch(checked=False)
+        self.toggle_spatial.toggled.connect(self._on_spatial_toggled)
+        lay.addLayout(_opt_row("Spatial Audio", "공간 음향 (헤드폰 권장)", self.toggle_spatial))
+        lay.addSpacing(4)
+
+        sp_row = QHBoxLayout()
+        sp_row.setSpacing(8)
+        sp_lbl = QLabel("Spatial Mode")
+        sp_lbl.setStyleSheet(f"color:{DARK['text_dim']}; font-size:13px;")
+        self.combo_spatial = QComboBox()
+        self.combo_spatial.addItems(["Natural — 은은함", "Strong — 뚜렷함", "Wide — 넓은 무대",
+                                     "3D Surround — 360° 입체 (HRTF)"])
+        self.combo_spatial.setCurrentIndex(1)
+        self.combo_spatial.currentIndexChanged.connect(self._on_spatial_mode_changed)
+        sp_row.addWidget(sp_lbl)
+        sp_row.addWidget(self.combo_spatial, 1)
+        lay.addLayout(sp_row)
+        lay.addSpacing(6)
+
+        # ── 테마 선택 ──
+        th_row = QHBoxLayout()
+        th_row.setSpacing(8)
+        th_lbl = QLabel("Theme")
+        th_lbl.setStyleSheet(f"color:{DARK['text_dim']}; font-size:13px;")
+        self.combo_theme = QComboBox()
+        import constants as _con
+        self.combo_theme.addItems(_con.THEME_ORDER)
+        try:
+            self.combo_theme.setCurrentIndex(_con.THEME_ORDER.index(_con.CURRENT_THEME))
+        except ValueError:
+            pass
+        self.combo_theme.currentIndexChanged.connect(self._on_theme_changed)
+        th_row.addWidget(th_lbl)
+        th_row.addWidget(self.combo_theme, 1)
+        lay.addLayout(th_row)
         lay.addSpacing(6)
 
         sr_row = QHBoxLayout()
@@ -696,7 +702,6 @@ class HiFiPlayer(QMainWindow):
         self.playlist.folder_dropped.connect(self._add_folder_with_sep)
         self.playlist.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.playlist.remove_requested.connect(self._remove_track)
-        self.playlist.remove_rows_requested.connect(self._remove_tracks)
         self.playlist.clear_requested.connect(self._clear_playlist)
         # 헤더가 playlist를 직접 참조해 스크롤바 폭 실시간 계산
         self.pl_header.set_playlist(self.playlist)
@@ -784,7 +789,6 @@ class HiFiPlayer(QMainWindow):
         self.mini_seek = QSlider(Qt.Horizontal)
         self.mini_seek.setRange(0, 1000)
         self.mini_seek.setFixedHeight(14)
-        _apply_click_jump(self.mini_seek)     # Windows에서도 클릭 지점으로 즉시 점프
         self.mini_seek.sliderPressed.connect(self._on_seek_pressed)
         self.mini_seek.sliderReleased.connect(self._on_mini_seek_released)
 
@@ -936,8 +940,7 @@ class HiFiPlayer(QMainWindow):
             f"오디오 파일 ({exts});;모든 파일 (*.*)"
         )
         if paths:
-            # 대화상자 다중 선택 순서는 클릭 순서 — 파일명 자연 정렬로 통일
-            self._add_file_list(sorted(paths, key=natural_sort_key))
+            self._add_file_list(paths)
 
     def _open_sacd_iso(self):
         """SACD ISO 파일 열기 — 트랙 목록 다이얼로그 표시"""
@@ -1068,9 +1071,8 @@ class HiFiPlayer(QMainWindow):
         if dirpath:
             files = []
             for root, dirs, filenames in os.walk(dirpath):
-                dirs[:] = sorted((d for d in dirs if not d.startswith('.')),
-                                 key=natural_sort_key)
-                for fname in sorted(filenames, key=natural_sort_key):
+                dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
+                for fname in sorted(filenames):
                     if fname.startswith('.') or fname.startswith('._'):
                         continue
                     if Path(fname).suffix.lower() in AudioEngine.SUPPORTED_FORMATS:
@@ -1090,28 +1092,6 @@ class HiFiPlayer(QMainWindow):
 
     def _track_count(self) -> int:
         return self.playlist.count()
-
-    def open_files_from_external(self, paths: list):
-        """파일 연결(탐색기 더블클릭)·두 번째 인스턴스에서 전달된 파일 열기.
-
-        플레이리스트에 추가한 뒤 첫 파일을 즉시 재생한다.
-        이미 리스트에 있는 파일이면 해당 행을 찾아 재생.
-        """
-        paths = [os.path.abspath(p) for p in paths if os.path.isfile(p)]
-        if not paths:
-            return
-        before = self.playlist.count()
-        self._add_file_list(sorted(paths, key=natural_sort_key))
-        if self.playlist.count() > before:
-            self._load_and_play(before)          # 새로 추가된 첫 트랙 재생
-            return
-        # 전부 중복이었던 경우 — 기존 행을 찾아 재생
-        want = {os.path.normcase(p) for p in paths}
-        for i in range(self.playlist.count()):
-            t = self._track_at(i)
-            if t and os.path.normcase(os.path.abspath(t.filepath)) in want:
-                self._load_and_play(i)
-                return
 
     def _add_file_list(self, paths: list):
         # 이미 추가된 경로 집합
@@ -1163,35 +1143,18 @@ class HiFiPlayer(QMainWindow):
         if self.current_index == row:
             self.engine.stop()
             self.current_index = -1
-            self._reset_now_playing()   # 재생 중이던 곡 삭제 → 앨범아트 등 정보 초기화
         elif self.current_index > row:
             self.current_index -= 1
         self.drop_hint.setVisible(self.playlist.count() == 0)
 
-    def _remove_tracks(self, rows: list):
-        """여러 트랙 한번에 제거 (Shift/Ctrl 다중 선택) — current_index 보정"""
-        rows = sorted({r for r in rows
-                       if 0 <= r < self.playlist.count() and not self._is_separator(r)},
-                      reverse=True)
-        if not rows:
-            return
-        was_current = self.current_index in rows
-        cur = self.current_index
-        for r in rows:
-            self.playlist.takeItem(r)
-            if cur > r:
-                cur -= 1
-        if was_current:
-            self.engine.stop()
-            self.current_index = -1
-            self._reset_now_playing()   # 재생 중이던 곡 포함 삭제 → 정보 초기화
-        else:
-            self.current_index = cur
-        self.playlist.set_playing_row(self.current_index)
-        self.drop_hint.setVisible(self.playlist.count() == 0)
+    def _clear_playlist(self):
+        """플레이리스트 전체 지우기 + Now Playing 초기화"""
+        self.engine.stop()
+        self.playlist.clear()
+        self.current_index = -1
+        self.drop_hint.setVisible(True)
 
-    def _reset_now_playing(self):
-        """Now Playing 표시 전부 초기화 — 전체 지우기·재생 중 트랙 삭제 시 공용"""
+        # ── Now Playing 표시 전부 초기화 ──────────────────────────
         self.lbl_title.setText("—")
         self.lbl_artist.setText(" ")
         self.lbl_album.setText(" ")
@@ -1200,15 +1163,6 @@ class HiFiPlayer(QMainWindow):
         self.lbl_cover.clear()
         self.lbl_cover.setStyleSheet("background:#0a0a0f;")
         self.art_stack.setCurrentIndex(0)
-
-        # 포맷/스펙 배지 초기화 (DSD64, 176.4kHz 등 남지 않도록)
-        self.lbl_format.setText("—")
-        self.lbl_format.setStyleSheet(self._np_default_styles['format'])
-        self.lbl_detail.setText("—")
-        self.lbl_detail.setStyleSheet(self._np_default_styles['detail'])
-        self.lbl_detail2.setText("")
-        self.lbl_detail2.setStyleSheet(self._np_default_styles['detail2'])
-        self.lbl_detail2.hide()
 
         # 시크바 / 시간 초기화
         self.seek_slider.setValue(0)
@@ -1229,16 +1183,6 @@ class HiFiPlayer(QMainWindow):
             self.mini_title.setText("—")
         if hasattr(self, 'mini_artist'):
             self.mini_artist.setText(" ")
-        if hasattr(self, 'mini_seek'):
-            self.mini_seek.setValue(0)
-
-    def _clear_playlist(self):
-        """플레이리스트 전체 지우기 + Now Playing 초기화"""
-        self.engine.stop()
-        self.playlist.clear()
-        self.current_index = -1
-        self.drop_hint.setVisible(True)
-        self._reset_now_playing()
 
     def _sort_playlist(self, key: str, ascending: bool):
         """헤더 클릭 시 트랙 정렬. key: 'title'|'artist'|'format'|'dur'"""
@@ -1383,29 +1327,19 @@ class HiFiPlayer(QMainWindow):
     def _toggle_play(self):
         if self._loader and self._loader.isRunning():
             return
-
-        # 플레이리스트에서 선택된 곡 (구분선 제외)
-        sel = self.playlist.currentRow()
-        sel_valid = sel >= 0 and not self._is_separator(sel)
+        if self.current_index < 0:
+            if self._track_count() > 0:
+                self._load_and_play(0)
+            return
 
         if self.engine.is_playing:
             self.engine.pause()
             self.btn_play.set_icon("play")
         elif self.engine.is_paused:
-            if sel_valid and sel != self.current_index:
-                # 일시정지 중 다른 곡을 선택했으면 그 곡을 재생
-                self._load_and_play(sel)
-            else:
-                self.engine.resume()
-                self.btn_play.set_icon("pause")
+            self.engine.resume()
+            self.btn_play.set_icon("pause")
         else:
-            # 정지 상태: 선택된 곡 > 이전 재생 곡 > 첫 곡 순으로 재생
-            if sel_valid:
-                self._load_and_play(sel)
-            elif self.current_index >= 0:
-                self._load_and_play(self.current_index)
-            elif self._track_count() > 0:
-                self._load_and_play(0)
+            self._load_and_play(self.current_index)
 
     def _stop(self):
         self.engine.stop()
@@ -1438,21 +1372,6 @@ class HiFiPlayer(QMainWindow):
         self._update_repeat_style()
 
     def _prev_track(self):
-        # 표준 동작(CD/Spotify와 동일): 3초 넘게 재생됐으면 현재 곡 처음으로,
-        # 3초 이내면 이전 곡으로 (곡 중간에 두 번 누르면 이전 곡)
-        if (self.current_index >= 0 and
-                (self.engine.is_playing or self.engine.is_paused) and
-                self.engine.current_position > 3.0):
-            if getattr(self, '_is_sacd_playing', False):
-                # SACD는 seek 미지원 → 트랙 재로드로 처음부터
-                self._load_and_play(self.current_index)
-            else:
-                self.engine.seek(0.0)
-                self.seek_slider.setValue(0)
-                self.lbl_pos.setText("0:00")
-                if hasattr(self, 'mini_seek'):
-                    self.mini_seek.setValue(0)
-            return
         prv = self.current_index - 1
         while prv >= 0 and self._is_separator(prv):
             prv -= 1
@@ -1558,9 +1477,25 @@ class HiFiPlayer(QMainWindow):
         if self._is_mini and not self._seeking:
             self.mini_seek.setValue(self.seek_slider.value())
 
-    # (주의) eventFilter는 아래쪽 글로벌 eventFilter 하나로 통합됨 —
-    # 과거 이 자리에 있던 SACD 안내용 eventFilter는 뒤의 재정의에 덮여
-    # 동작하지 않던 죽은 코드였음 (시크 휠 처리와 함께 통합 구현)
+    def eventFilter(self, obj, event):
+        """SACD ISO 재생 중 seek 슬라이더 클릭 시 안내 메시지 표시"""
+        from PyQt5.QtCore import QEvent
+        from PyQt5.QtWidgets import QToolTip
+        seek_widgets = [self.seek_slider]
+        if hasattr(self, 'mini_seek'):
+            seek_widgets.append(self.mini_seek)
+        if (obj in seek_widgets and
+                getattr(self, '_is_sacd_playing', False) and
+                event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick)):
+            QToolTip.showText(
+                obj.mapToGlobal(event.pos()),
+                "SACD ISO는 탐색(seek)을 지원하지 않습니다",
+                obj,
+                obj.rect(),
+                3000   # 3초간 표시
+            )
+            return True   # 이벤트 소비 (슬라이더 이동 차단)
+        return super().eventFilter(obj, event)
 
     def _on_seek_pressed(self):
         self._seeking = True
@@ -1800,7 +1735,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle(f"Nikon Chinge HiFi Player v{APP_VERSION}")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.1")
 
         except Exception:
             pass
@@ -1809,35 +1744,7 @@ class HiFiPlayer(QMainWindow):
     # 키보드 단축키
     # ─────────────────────────────────────────────
     def eventFilter(self, obj, event):
-        """글로벌 이벤트 필터 — 키보드 단축키 + 시크 슬라이더 특수 처리"""
-        # ── 시크 슬라이더 전용: SACD 안내 + 마우스 휠 시크 ─────────
-        seek_widgets = [self.seek_slider]
-        if hasattr(self, 'mini_seek'):
-            seek_widgets.append(self.mini_seek)
-        if obj in seek_widgets:
-            if (getattr(self, '_is_sacd_playing', False) and
-                    event.type() in (QEvent.MouseButtonPress,
-                                     QEvent.MouseButtonDblClick, QEvent.Wheel)):
-                from PyQt5.QtWidgets import QToolTip
-                QToolTip.showText(
-                    obj.mapToGlobal(obj.rect().center()),
-                    "SACD ISO는 탐색(seek)을 지원하지 않습니다",
-                    obj, obj.rect(), 3000)
-                return True   # 이벤트 소비 (슬라이더 이동 차단)
-            if event.type() == QEvent.Wheel:
-                # 휠 시크: 노치당 ±5초 (볼륨 휠과 동일하게 즉시 반영)
-                dur = self.engine.duration
-                steps = event.angleDelta().y() / 120.0
-                if dur > 0 and steps != 0 and not getattr(self, '_seeking', False):
-                    new_pos = min(max(self.engine.current_position + steps * 5.0, 0.0),
-                                  max(dur - 0.5, 0.0))
-                    self.engine.seek(new_pos)
-                    val = int(new_pos / dur * 1000)
-                    self.seek_slider.setValue(val)
-                    if hasattr(self, 'mini_seek'):
-                        self.mini_seek.setValue(val)
-                return True   # 기본 휠(값만 변경, 시크 안 됨) 차단
-
+        """QApplication 글로벌 이벤트 필터 — 포커스 위치 무관하게 키보드 단축키 처리"""
         if event.type() == QEvent.KeyPress:
             key = event.key()
             # 텍스트 입력 위젯(QLineEdit 등)에서는 가로채지 않음
@@ -1867,14 +1774,9 @@ class HiFiPlayer(QMainWindow):
                 self.toggle_mini_player()
                 return True
             elif key in (Qt.Key_Delete, Qt.Key_Backspace):
-                sel_rows = [self.playlist.row(i) for i in self.playlist.selectedItems()]
-                sel_rows = [r for r in sel_rows if not self._is_separator(r)]
-                if len(sel_rows) > 1:
-                    self._remove_tracks(sel_rows)          # 다중 선택 삭제
-                else:
-                    row = sel_rows[0] if sel_rows else self.playlist.currentRow()
-                    if row >= 0 and not self._is_separator(row):
-                        self._remove_track(row)
+                row = self.playlist.currentRow()
+                if row >= 0 and not self._is_separator(row):
+                    self._remove_track(row)
                 return True
         return super().eventFilter(obj, event)
 
@@ -1892,9 +1794,13 @@ class HiFiPlayer(QMainWindow):
         self.engine.set_rg_enabled(on)
 
     def _on_rg_target_changed(self, value: int):
-        """RG target 슬라이더 값 변경 — value = dB 정수 (-18 ~ -10)."""
+        """RG target 슬라이더 값 변경 — value = dB 정수 (-18 ~ -10).
+        엔진이 재생 중인 곡에 즉시 반영하므로, 표시 문자열도 함께 갱신."""
         self.lbl_rg_target.setText(f"{value} dB")
         self.engine.set_rg_target(float(value))
+        rg_src = getattr(self.engine, '_rg_source', '')
+        if rg_src:
+            self.lbl_rg_info.setText(rg_src)
 
     def _on_rg_mode_changed(self, mode: str):
         """Track / Album RG 모드 전환 — 현재 트랙 gain 즉시 갱신."""
@@ -1935,14 +1841,62 @@ class HiFiPlayer(QMainWindow):
             msg.setIcon(QMessageBox.Warning)
             msg.exec_()
         # 현재 DSD 파일 재생 중이면 즉시 재로드하여 모드 전환 반영
-        if self.current_index >= 0:
-            track = self._track_at(self.current_index)
-            if track and hasattr(track, 'is_dsd') and track.is_dsd:
-                was_playing = (self.engine._state == 'playing')
-                pos = self.engine.current_position
-                self._start_track(self.current_index)
-                if was_playing:
-                    self.engine.seek(pos)
+        # (실패해도 앱이 꺼지지 않도록 안전망 — 오류 시 DoP를 자동 해제하고 안내)
+        try:
+            if self.current_index >= 0:
+                track = self._track_at(self.current_index)
+                if track and hasattr(track, 'is_dsd') and track.is_dsd:
+                    was_playing = (self.engine._state == 'playing')
+                    pos = self.engine.current_position
+                    self._start_track(self.current_index)
+                    if was_playing:
+                        self.engine.seek(pos)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            try:
+                self.engine.set_dop_mode(False)
+                self.toggle_dop.blockSignals(True)
+                self.toggle_dop.setChecked(False)
+                self.toggle_dop.blockSignals(False)
+            except Exception:
+                pass
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "DoP 전환 실패",
+                f"DoP 모드 전환 중 오류가 발생해 DoP를 해제했습니다.\n\n{e}\n\n"
+                "현재 출력 장치가 DoP(DSD over PCM)를 지원하지 않을 수 있습니다.")
+
+    def _on_spatial_toggled(self, on: bool):
+        self.engine.set_spatial_enabled(on)
+
+    _SPATIAL_MODES = {0: 'natural', 1: 'strong', 2: 'wide', 3: '3d'}
+
+    def _on_spatial_mode_changed(self, idx: int):
+        self.engine.set_spatial_mode(self._SPATIAL_MODES.get(idx, 'strong'))
+
+    def _on_theme_changed(self, idx: int):
+        """테마 변경 — 설정 저장 후 앱 자동 재시작 (색상 전면 적용)"""
+        import constants as _con
+        name = _con.THEME_ORDER[idx] if 0 <= idx < len(_con.THEME_ORDER) else None
+        if not name or name == _con.CURRENT_THEME:
+            return
+        _con.CURRENT_THEME = name
+        self._save_settings()
+        from PyQt5.QtWidgets import QMessageBox
+        ret = QMessageBox.question(
+            self, "테마 변경",
+            f"'{name}' 테마를 적용하려면 앱을 다시 시작해야 합니다.\n지금 재시작할까요?",
+            QMessageBox.Yes | QMessageBox.No)
+        if ret == QMessageBox.Yes:
+            import subprocess
+            # 번들 앱/개발 환경 모두 대응
+            if getattr(sys, 'frozen', False):
+                subprocess.Popen([sys.executable])
+            else:
+                subprocess.Popen([sys.executable] + sys.argv)
+            self.engine.cleanup()
+            QApplication.quit()
 
     def _on_bit_perfect_toggled(self, on: bool):
         self.engine.set_bit_perfect(on)
@@ -1951,8 +1905,8 @@ class HiFiPlayer(QMainWindow):
         self.toggle_rg.setEnabled(not on)
         self.btn_rg_track.setEnabled(not on)
         self.btn_rg_album.setEnabled(not on)
-        self.slider_rg_target.setEnabled(not on)   # RG 타겟(LUFS) 슬라이더도 잠금
         self.toggle_dither.setEnabled(not on)
+        self.toggle_spatial.setEnabled(not on)
         self.combo_upsample.setEnabled(not on)
         # 볼륨 슬라이더: 비트퍼펙트 ON 시 비활성화 + 툴팁 안내
         self.vol_slider.setEnabled(not on)
@@ -2065,11 +2019,20 @@ class HiFiPlayer(QMainWindow):
             self.engine.set_fixed_output_sr(self._UPSAMPLE_SR.get(ups_idx, 0))
             self.toggle_dop.setChecked(dop_on)
             self.engine.set_dop_mode(dop_on)
+            spatial_on = data.get('spatial', False)
+            self.toggle_spatial.setChecked(spatial_on)
+            self.engine.set_spatial_enabled(spatial_on)
+            sp_idx = data.get('spatial_mode_idx', 1)
+            self.combo_spatial.setCurrentIndex(sp_idx)
+            self.engine.set_spatial_mode(self._SPATIAL_MODES.get(sp_idx, 'strong'))
             if bp_on:
-                # 잠금 목록 중복 구현 금지 — 토글 핸들러로 일원화
-                # (과거 이 블록에 slider_rg_target/vol_slider가 빠져
-                #  재시작 후 BP ON 상태에서 RG 슬라이더가 움직이던 원인)
-                self._on_bit_perfect_toggled(True)
+                self.eq_panel.setEnabled(False)
+                self.toggle_rg.setEnabled(False)
+                self.btn_rg_track.setEnabled(False)
+                self.btn_rg_album.setEnabled(False)
+                self.toggle_dither.setEnabled(False)
+                self.toggle_spatial.setEnabled(False)
+                self.combo_upsample.setEnabled(False)
             # 출력 장치 복원
             saved_dev_name = data.get('output_device_name', '')
             if saved_dev_name:
@@ -2154,6 +2117,9 @@ class HiFiPlayer(QMainWindow):
                 'rg_mode':        'album' if self.btn_rg_album.isChecked() else 'track',
                 'eq_db_range':    self.eq_panel.get_db_range(),
                 'dop_mode':       self.toggle_dop.isChecked(),
+                'spatial':        self.toggle_spatial.isChecked(),
+                'spatial_mode_idx': self.combo_spatial.currentIndex(),
+                'theme':          __import__('constants').CURRENT_THEME,
                 # 출력 장치
                 'output_device_name': saved_device_name,
             }
@@ -2178,8 +2144,8 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Nikon Chinge HiFi Music Player")
-    app.setApplicationVersion(APP_VERSION)
+    app.setApplicationName("Nikon Chinge HiFi Music Player - Spatial")
+    app.setApplicationVersion("1.0")
     app.setOrganizationName("HiFiPlayer")
 
     window = HiFiPlayer()

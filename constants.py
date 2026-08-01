@@ -2,9 +2,6 @@
 HiFi Player — 색상·스타일시트·EQ 프리셋 상수 모음
 """
 
-# 앱 버전 (창 제목·About·빌드 산출물 파일명과 통일)
-APP_VERSION = "3.1"
-
 # ─────────────────────────────────────────────────────────────
 # 파라메트릭 EQ 프리셋
 # 포맷: [(type, freq_hz, gain_db, q), ...]
@@ -45,33 +42,91 @@ EQ_BAND_LABELS = ["Low\n60Hz", "125Hz", "250Hz", "500Hz", "1kHz", "2kHz", "4kHz"
 
 
 # ─────────────────────────────────────────────────────────────
-# 색상 테마 (Roon 스타일 프리미엄 다크)
+# 색상 테마 시스템 — 앱 내에서 선택 가능 (HiFi Options > Theme)
 # ─────────────────────────────────────────────────────────────
-DARK = {
-    'bg':          '#050508',   # 순수 블랙에 가까운 극암
-    'panel':       '#090910',   # 좌측 패널 — 더 짙게
-    'panel2':      '#07070e',   # 우측/리스트 배경
-    'panel3':      '#0f0f18',   # 카드/섹션 배경
-    'border':      '#161624',   # 경계선
-    'border2':     '#222232',   # 조금 더 강한 경계
-    'accent':      '#b8913a',   # 짙은 골드 액센트
-    'accent2':     '#d4a84e',   # 밝은 골드
-    'accent_blue': '#3a8eee',   # 파란 액센트
-    'text':        '#e8e8f0',   # 밝은 흰색
-    'text_dim':    '#787898',   # 보조 텍스트
-    'text_muted':  '#3a3a58',   # 흐린 텍스트
-    'playing':     '#b8913a',   # 재생 중 = 골드
-    'dsd':         '#d09020',   # DSD 오렌지
-    'error':       '#ff4a4a',
-    'slider_bg':   '#161624',
-    'slider_fill': '#b8913a',   # 골드 슬라이더
-    'btn':         '#0e0e16',
-    'btn_hover':   '#161624',
-    'btn_active':  '#1e1e30',
-    'divider':     '#101020',
+THEMES = {
+    # 진짜 오렌지 — 배경까지 오렌지 톤의 리치 앰버 다크
+    'Sunset Orange': {
+        'bg': '#331a08', 'panel': '#3d2009', 'panel2': '#371d08', 'panel3': '#4a2a10',
+        'border': '#66401c', 'border2': '#7d5226',
+        'accent': '#ffa245', 'accent2': '#ffc06e', 'accent_blue': '#ffd166',
+        'text': '#fff2e2', 'text_dim': '#e0b48a', 'text_muted': '#a37a4e',
+        'playing': '#ffa245', 'dsd': '#ffd166', 'error': '#ff6b5c',
+        'slider_bg': '#66401c', 'slider_fill': '#ffa245',
+        'btn': '#452709', 'btn_hover': '#553112', 'btn_active': '#663d18',
+        'divider': '#3a2008',
+    },
+    # 밝은 오렌지 라이트 — 화면 전체가 환한 오렌지 크림
+    'Orange Light': {
+        'bg': '#fff1e0', 'panel': '#ffe8cc', 'panel2': '#ffedd8', 'panel3': '#ffdfb8',
+        'border': '#f0c894', 'border2': '#e0b070',
+        'accent': '#f97316', 'accent2': '#fb923c', 'accent_blue': '#ea580c',
+        'text': '#3a2410', 'text_dim': '#8a5a2e', 'text_muted': '#b98a58',
+        'playing': '#ea580c', 'dsd': '#d97706', 'error': '#dc2626',
+        'slider_bg': '#f0d0a8', 'slider_fill': '#f97316',
+        'btn': '#ffe4c4', 'btn_hover': '#ffd9ae', 'btn_active': '#ffcf9c',
+        'divider': '#f5d9b8',
+    },
+    # 오리지널 블랙+골드
+    'Black Gold': {
+        'bg': '#050508', 'panel': '#090910', 'panel2': '#07070e', 'panel3': '#0f0f18',
+        'border': '#161624', 'border2': '#222232',
+        'accent': '#b8913a', 'accent2': '#d4a84e', 'accent_blue': '#3a8eee',
+        'text': '#e8e8f0', 'text_dim': '#787898', 'text_muted': '#3a3a58',
+        'playing': '#b8913a', 'dsd': '#d09020', 'error': '#ff4a4a',
+        'slider_bg': '#161624', 'slider_fill': '#b8913a',
+        'btn': '#0e0e16', 'btn_hover': '#161624', 'btn_active': '#1e1e30',
+        'divider': '#101020',
+    },
+    # 딥바이올렛 + 일렉트릭 블루
+    'Violet Space': {
+        'bg': '#0a0714', 'panel': '#0d0918', 'panel2': '#0b0813', 'panel3': '#141024',
+        'border': '#241d3d', 'border2': '#332a52',
+        'accent': '#8b5cf6', 'accent2': '#a78bfa', 'accent_blue': '#38bdf8',
+        'text': '#ece9f8', 'text_dim': '#8d85b3', 'text_muted': '#4a4270',
+        'playing': '#8b5cf6', 'dsd': '#38bdf8', 'error': '#ff4a6a',
+        'slider_bg': '#241d3d', 'slider_fill': '#8b5cf6',
+        'btn': '#120e20', 'btn_hover': '#1c1631', 'btn_active': '#261e42',
+        'divider': '#151024',
+    },
 }
 
-STYLESHEET = f"""
+THEME_ORDER = ['Sunset Orange', 'Orange Light', 'Black Gold', 'Violet Space']
+CURRENT_THEME = 'Sunset Orange'
+DARK = dict(THEMES[CURRENT_THEME])
+
+
+def hex_shade(h, f):
+    """hex 색상을 f배 밝기로 (f<1 어둡게, f>1 밝게)"""
+    h = h.lstrip('#')
+    r = max(0, min(255, int(int(h[0:2], 16) * f)))
+    g = max(0, min(255, int(int(h[2:4], 16) * f)))
+    b = max(0, min(255, int(int(h[4:6], 16) * f)))
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+
+# 저장된 테마 조기 로드 (UI 모듈 임포트 전에 DARK 확정)
+def _load_saved_theme():
+    global CURRENT_THEME
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        with open(_Path.home() / '.hifi_player_settings.json', encoding='utf-8') as _f:
+            _t = _json.load(_f).get('theme')
+        if _t in THEMES:
+            CURRENT_THEME = _t
+            DARK.clear()
+            DARK.update(THEMES[_t])
+    except Exception:
+        pass
+
+_load_saved_theme()
+
+def build_stylesheet():
+    _grad = (f"qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+             f"stop:0 {DARK['accent2']}, stop:0.5 {DARK['accent']}, "
+             f"stop:1 {hex_shade(DARK['accent'], 0.8)})")
+    return f"""
 QMainWindow, QWidget {{
     background-color: {DARK['bg']};
     color: {DARK['text']};
@@ -180,7 +235,7 @@ QSlider::groove:horizontal {{
     border-radius: 1px;
 }}
 QSlider::sub-page:horizontal {{
-    background: {DARK['accent']};
+    background: {_grad};
     border-radius: 1px;
 }}
 QSlider::handle:horizontal {{
@@ -244,5 +299,9 @@ QSplitter::handle {{
     background: {DARK['border']};
 }}
 """
+
+
+STYLESHEET = build_stylesheet()
+
 
 
