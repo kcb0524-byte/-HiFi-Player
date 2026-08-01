@@ -174,8 +174,9 @@ QListWidget::item {{
     border-bottom: 1px solid {DARK['bg']};
 }}
 QListWidget::item:selected {{
-    background-color: #1e1a10;
-    color: {DARK['accent']};
+    background-color: {DARK['btn_active']};
+    color: {DARK['accent2']};
+    border-left: 3px solid {DARK['accent']};
 }}
 QListWidget::item:hover {{
     background-color: {DARK['btn_hover']};

@@ -155,7 +155,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.1")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.2")
         self.setMinimumSize(920, 900)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -1735,7 +1735,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.1")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.2")
 
         except Exception:
             pass
@@ -1774,9 +1774,15 @@ class HiFiPlayer(QMainWindow):
                 self.toggle_mini_player()
                 return True
             elif key in (Qt.Key_Delete, Qt.Key_Backspace):
-                row = self.playlist.currentRow()
-                if row >= 0 and not self._is_separator(row):
-                    self._remove_track(row)
+                # 다중 선택 삭제 지원 — 선택된 모든 곡을 뒤에서부터 제거
+                rows = sorted({self.playlist.row(it) for it in self.playlist.selectedItems()},
+                              reverse=True)
+                if not rows:
+                    cur = self.playlist.currentRow()
+                    rows = [cur] if cur >= 0 else []
+                for row in rows:
+                    if row >= 0 and not self._is_separator(row):
+                        self._remove_track(row)
                 return True
         return super().eventFilter(obj, event)
 

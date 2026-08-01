@@ -1723,12 +1723,18 @@ class PlaylistDelegate(QStyledItemDelegate):
 
         # ── 배경 ────────────────────────────────────────────
         if is_selected:
-            bg = QColor('#1e1a10')
+            # 테마 색 기반 선택 표시 (하드코딩 색이 오렌지 테마에서
+            # 배경과 구분되지 않아 선택이 안 보이던 문제 수정)
+            bg = QColor(DARK['btn_active'])
         elif is_hover:
             bg = QColor(DARK['btn_hover'])
         else:
             bg = QColor(DARK['panel2'])
         painter.fillRect(rect, bg)
+        if is_selected:
+            # 좌측 액센트 바 — 어느 테마에서도 선택이 또렷하게 보이도록
+            painter.fillRect(rect.left(), rect.top(), 3, rect.height(),
+                             QColor(DARK['accent']))
 
         # 하단 구분선
         painter.setPen(QPen(QColor(DARK['bg']), 1))
@@ -1867,7 +1873,11 @@ class PlaylistWidget(QListWidget):
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragDrop)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        # 내부 드래그 기본 동작을 '이동'으로 강제 (macOS/Windows에서 복사로
+        # 제안되어 곡이 복제되던 버그 수정)
+        self.setDefaultDropAction(Qt.MoveAction)
+        # 다중 선택 지원: Cmd/Ctrl+클릭(개별), Shift+클릭(범위)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -1949,6 +1959,9 @@ class PlaylistWidget(QListWidget):
                 self.files_dropped.emit(loose_files)
             event.acceptProposedAction()
         else:
+            # 내부 재정렬: OS가 복사를 제안해도 '이동'으로 강제 (복제 버그 수정)
+            if event.source() is self:
+                event.setDropAction(Qt.MoveAction)
             super().dropEvent(event)
 
     def _collect_from_dir(self, dirpath: str) -> list:
