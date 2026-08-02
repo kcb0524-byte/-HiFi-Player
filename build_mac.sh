@@ -19,9 +19,18 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
+# ── 동시 실행 방지 ──
+LOCK="/tmp/ncmp_main_build.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo ""
+  echo "⚠ 이미 다른 빌드가 실행 중입니다. 이 창은 닫으셔도 됩니다."
+  exit 0
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
 APP_NAME="Nikon Chinge HiFi Player"
 BUNDLE_ID="com.twsemicon.hifi-player"
-VERSION="3.1"
+VERSION="3.1.1"
 ICON="icon.icns"
 
 # ── Python 환경 확인 및 통일 ─────────────────────────────────────
