@@ -1884,10 +1884,19 @@ class PlaylistWidget(QListWidget):
     clear_requested  = pyqtSignal()
 
     SEP_ROLE   = Qt.UserRole + 2   # "__sep__" 마커
-    SCROLL_ZONE  = 36   # px — 이 범위 안에서 자동 스크롤
-    SCROLL_MIN   = 1    # px/tick — 존 가장자리 (아주 느리게 시작)
-    SCROLL_MAX   = 4    # px/tick — 리스트 끝 (최대 속도)
-    SCROLL_TICK  = 26   # ms — 틱 간격 (클수록 느림)
+    # ── 드래그 자동 스크롤 속도 (OS별 최적화) ──
+    # 같은 수치라도 Windows가 체감상 빠르게 느껴져 플랫폼별로 분리.
+    #   macOS  : 최대 267px/s — 답답하지 않게
+    #   Windows: 최대  83px/s — 위치 잡기 쉽게
+    SCROLL_ZONE = 36    # px — 이 범위 안에서 자동 스크롤
+    if sys.platform == 'win32':
+        SCROLL_MIN  = 1   # px/tick — 존 가장자리 (아주 느리게 시작)
+        SCROLL_MAX  = 3   # px/tick — 리스트 끝 (최대 속도)
+        SCROLL_TICK = 36  # ms — 틱 간격 (클수록 느림)
+    else:
+        SCROLL_MIN  = 2
+        SCROLL_MAX  = 6
+        SCROLL_TICK = 22
 
     def __init__(self, parent=None):
         super().__init__(parent)
