@@ -155,7 +155,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.3")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.4")
         self.setMinimumSize(920, 900)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -1327,19 +1327,29 @@ class HiFiPlayer(QMainWindow):
     def _toggle_play(self):
         if self._loader and self._loader.isRunning():
             return
-        if self.current_index < 0:
-            if self._track_count() > 0:
-                self._load_and_play(0)
-            return
+
+        # 플레이리스트에서 선택된 곡 (구분선 제외)
+        sel = self.playlist.currentRow()
+        sel_valid = sel >= 0 and not self._is_separator(sel)
 
         if self.engine.is_playing:
             self.engine.pause()
             self.btn_play.set_icon("play")
         elif self.engine.is_paused:
-            self.engine.resume()
-            self.btn_play.set_icon("pause")
+            if sel_valid and sel != self.current_index:
+                # 일시정지 중 다른 곡을 선택했으면 그 곡을 재생
+                self._load_and_play(sel)
+            else:
+                self.engine.resume()
+                self.btn_play.set_icon("pause")
         else:
-            self._load_and_play(self.current_index)
+            # 정지 상태: 선택된 곡 > 이전 재생 곡 > 첫 곡 순으로 재생
+            if sel_valid:
+                self._load_and_play(sel)
+            elif self.current_index >= 0:
+                self._load_and_play(self.current_index)
+            elif self._track_count() > 0:
+                self._load_and_play(0)
 
     def _stop(self):
         self.engine.stop()
@@ -1735,7 +1745,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.3")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.4")
 
         except Exception:
             pass
