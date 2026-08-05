@@ -2045,7 +2045,7 @@ class HiFiPlayer(QMainWindow):
             dither_on  = data.get('dither', True)
             ups_idx    = data.get('upsample_idx', 0)
             dop_on     = data.get('dop_mode', False)
-            eq_range   = data.get('eq_db_range', 12)
+            eq_range   = data.get('eq_db_range', 6)   # 앱 기본값(±6dB)과 일치
             self.toggle_rg.setChecked(rg_on)
             self.engine.set_rg_enabled(rg_on)
             # RG target 슬라이더 복원
@@ -2054,9 +2054,9 @@ class HiFiPlayer(QMainWindow):
             # RG 모드 복원
             rg_mode = data.get('rg_mode', 'track')
             self._on_rg_mode_changed(rg_mode)
-            # EQ dB 범위 복원
-            if eq_range == 6:
-                self.eq_panel._on_range_toggle(6)
+            # EQ dB 범위 복원 — 저장된 값을 그대로 적용
+            # (기존: 6일 때만 처리해 ±12dB로 쓰다 재시작하면 ±6dB로 돌아가던 버그)
+            self.eq_panel._on_range_toggle(12 if int(eq_range) == 12 else 6)
             self.toggle_bp.setChecked(bp_on)
             self.engine.set_bit_perfect(bp_on)
             self.toggle_dither.setChecked(dither_on)

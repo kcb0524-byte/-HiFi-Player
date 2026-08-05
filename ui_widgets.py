@@ -1884,9 +1884,10 @@ class PlaylistWidget(QListWidget):
     clear_requested  = pyqtSignal()
 
     SEP_ROLE   = Qt.UserRole + 2   # "__sep__" 마커
-    SCROLL_ZONE  = 40   # px — 이 범위 안에서 자동 스크롤
-    SCROLL_MIN   = 2    # px/tick — 존 가장자리 (느리게 시작)
-    SCROLL_MAX   = 7    # px/tick — 리스트 끝 (최대 속도)
+    SCROLL_ZONE  = 36   # px — 이 범위 안에서 자동 스크롤
+    SCROLL_MIN   = 1    # px/tick — 존 가장자리 (아주 느리게 시작)
+    SCROLL_MAX   = 4    # px/tick — 리스트 끝 (최대 속도)
+    SCROLL_TICK  = 26   # ms — 틱 간격 (클수록 느림)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1913,7 +1914,7 @@ class PlaylistWidget(QListWidget):
         self._scroll_dir   = 0
         self._scroll_speed = self.SCROLL_MIN
         self._scroll_timer = QTimer(self)
-        self._scroll_timer.setInterval(20)
+        self._scroll_timer.setInterval(self.SCROLL_TICK)
         self._scroll_timer.timeout.connect(self._do_auto_scroll)
 
     def _do_auto_scroll(self):
