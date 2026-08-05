@@ -131,12 +131,12 @@ jobs:
           #pragma encoding "utf-8"
           [Setup]
           AppName=Nikon Chinge HiFi Player Spatial
-          AppVersion=1.7.2
+          AppVersion=1.7.3
           AppPublisher=Nikon Chinge
           DefaultDirName={autopf}\Nikon Chinge HiFi Player Spatial
           DefaultGroupName=Nikon Chinge HiFi Player Spatial
           OutputDir=dist
-          OutputBaseFilename=NikonChingeHiFiPlayerSpatial_Setup_1.7.2
+          OutputBaseFilename=NikonChingeHiFiPlayerSpatial_Setup_1.7.3
           SetupIconFile=icon.ico
           Compression=lzma2
           SolidCompression=yes
@@ -191,7 +191,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/NikonChingeHiFiPlayerSpatial_Setup_1.7.2.exe
+          path: dist/NikonChingeHiFiPlayerSpatial_Setup_1.7.3.exe
           retention-days: 30
 
   # ── macOS 빌드 (Apple Silicon) ─────────────────────────────────
@@ -331,11 +331,11 @@ jobs:
           hdiutil create -volname "Nikon Chinge HiFi Player Spatial" \
             -srcfolder "dist/Nikon Chinge HiFi Player Spatial.app" \
             -ov -format UDZO \
-            "dist/NikonChingeHiFiPlayerSpatial-1.7.2-arm64.dmg"
+            "dist/NikonChingeHiFiPlayerSpatial-1.7.3-arm64.dmg"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-arm64
-          path: dist/NikonChingeHiFiPlayerSpatial-1.7.2-arm64.dmg
+          path: dist/NikonChingeHiFiPlayerSpatial-1.7.3-arm64.dmg
           retention-days: 30
