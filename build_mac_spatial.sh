@@ -231,6 +231,31 @@ set_plist NSDocumentsFolderUsageDescription "음악 파일을 열기 위해 접�
 set_plist NSDownloadsFolderUsageDescription "음악 파일을 열기 위해 접근합니다" string
 set_plist NSRemovableVolumesUsageDescription "외장 드라이브의 음악 파일 및 SACD ISO를 재생합니다" string
 
+# 파일 연결 등록 (Finder 더블클릭 → 이 앱으로 열기, 전 지원 포맷)
+python3 - "$INFO_PLIST" <<'PYEOF_DT'
+import sys, plistlib
+plist_path = sys.argv[1]
+with open(plist_path, 'rb') as f:
+    plist = plistlib.load(f)
+audio_exts = [
+    'flac', 'wav', 'aiff', 'aif',
+    'mp3', 'm4a', 'aac',
+    'ogg', 'opus',
+    'wv', 'ape', 'tta', 'wma',
+    'dsf', 'dff', 'iso',
+]
+plist['CFBundleDocumentTypes'] = [{
+    'CFBundleTypeName': 'Audio File',
+    'CFBundleTypeExtensions': audio_exts,
+    'CFBundleTypeRole': 'Viewer',
+    'LSHandlerRank': 'Alternate',
+}]
+with open(plist_path, 'wb') as f:
+    plistlib.dump(plist, f)
+print(f'  \u2713 CFBundleDocumentTypes \ub4f1\ub85d ({len(audio_exts)}\uac1c \ud655\uc7a5\uc790)')
+PYEOF_DT
+
+
 # ── 7. scipy 불필요 파일 제거 (용량 최적화) ──────────────────────
 echo "▶ scipy 테스트/문서 파일 제거 (용량 최적화)..."
 for SEARCH_DIR in "$APP_PATH/Contents/Frameworks" "$APP_PATH/Contents/Resources"; do
