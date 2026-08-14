@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QComboBox, QFrame, QSplitter, QProgressBar,
     QToolButton, QSizePolicy, QMenu, QAction, QAbstractItemView,
     QMessageBox, QStyle, QGridLayout, QScrollArea, QCheckBox,
-    QStackedWidget, QStyledItemDelegate,
+    QStackedWidget, QStyledItemDelegate, QProxyStyle,
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QThread, pyqtSignal, QUrl, QSize, QMimeData,
@@ -47,7 +47,20 @@ from ui_widgets import (
     TrackLoader, MarqueeLabel, CDWidget, EQGraph, PresetPanel, EQPanel,
     ToggleSwitch, TransportButton, IconButton, VUMeter,
     TrackItem, PlaylistDelegate, PlaylistHeader, PlaylistWidget,
+    natural_sort_key,
 )
+
+class ClickJumpSliderStyle(QProxyStyle):
+    """슬라이더 홈(groove) 클릭 시 핸들이 클릭 지점으로 바로 점프하는 스타일.
+
+    macOS 기본 스타일은 원래 이 동작이지만, Windows 기본 스타일은
+    클릭 시 페이지 스텝만 이동해서 시크/볼륨 클릭이 클릭 위치로 가지 않음.
+    SH_Slider_AbsoluteSetButtons에 왼쪽 버튼을 지정해 전 플랫폼 동작을 통일한다.
+    """
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.SH_Slider_AbsoluteSetButtons:
+            return int(Qt.LeftButton)
+        return super().styleHint(hint, option, widget, returnData)
 
 class HiFiPlayer(QMainWindow):
     _position_signal = pyqtSignal(float, float)
@@ -155,7 +168,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.4")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.5")
         self.setMinimumSize(920, 900)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -1093,6 +1106,98 @@ class HiFiPlayer(QMainWindow):
     def _track_count(self) -> int:
         return self.playlist.count()
 
+    def open_files_from_external(self, paths: list):
+        """파일 연결(Finder/탐색기 더블클릭)·두 번째 인스턴스에서 전달된 파일 열기.
+
+        플레이리스트에 추가한 뒤 첫 파일을 즉시 재생한다.
+        이미 리스트에 있는 파일이면 해당 행을 찾아 재생.
+        """
+        paths = [os.path.abspath(p) for p in paths if os.path.isfile(p)]
+        if not paths:
+            return
+        before = self.playlist.count()
+        self._add_file_list(sorted(paths, key=natural_sort_key))
+        if self.playlist.count() > before:
+            self._load_and_play(before)          # 새로 추가된 첫 트랙 재생
+            return
+        # 전부 중복이었던 경우 — 기존 행을 찾아 재생
+        want = {os.path.normcase(p) for p in paths}
+        for i in range(self.playlist.count()):
+            t = self._track_at(i)
+            if t and os.path.normcase(os.path.abspath(t.filepath)) in want:
+                self._load_and_play(i)
+                return
+
+def _apply_click_jump(slider: QSlider):
+    """슬라이더에 클릭-점프 스타일 적용 (proxy 수명은 슬라이더에 귀속)"""
+    proxy = ClickJumpSliderStyle(slider.style().objectName())
+    proxy.setParent(slider)   # QWidget.setStyle은 소유권을 갖지 않으므로 부모로 수명 관리
+    slider.setStyle(proxy)
+
+    def _remove_tracks(self, rows: list):
+        """여러 트랙 한번에 제거 (Shift/Ctrl 다중 선택) — current_index 보정"""
+        rows = sorted({r for r in rows
+                       if 0 <= r < self.playlist.count() and not self._is_separator(r)},
+                      reverse=True)
+        if not rows:
+            return
+        was_current = self.current_index in rows
+        cur = self.current_index
+        for r in rows:
+            self.playlist.takeItem(r)
+            if cur > r:
+                cur -= 1
+        if was_current:
+            self.engine.stop()
+            self.current_index = -1
+            self._reset_now_playing()   # 재생 중이던 곡 포함 삭제 → 정보 초기화
+        else:
+            self.current_index = cur
+        self.playlist.set_playing_row(self.current_index)
+        self.drop_hint.setVisible(self.playlist.count() == 0)
+
+    def _reset_now_playing(self):
+        """Now Playing 표시 전부 초기화 — 전체 지우기·재생 중 트랙 삭제 시 공용"""
+        self.lbl_title.setText("—")
+        self.lbl_artist.setText(" ")
+        self.lbl_album.setText(" ")
+
+        # 커버아트 지우고 LP 애니메이션으로 복귀
+        self.lbl_cover.clear()
+        self.lbl_cover.setStyleSheet("background:#0a0a0f;")
+        self.art_stack.setCurrentIndex(0)
+
+        # 포맷/스펙 배지 초기화 (DSD64, 176.4kHz 등 남지 않도록)
+        self.lbl_format.setText("—")
+        self.lbl_format.setStyleSheet(self._np_default_styles['format'])
+        self.lbl_detail.setText("—")
+        self.lbl_detail.setStyleSheet(self._np_default_styles['detail'])
+        self.lbl_detail2.setText("")
+        self.lbl_detail2.setStyleSheet(self._np_default_styles['detail2'])
+        self.lbl_detail2.hide()
+
+        # 시크바 / 시간 초기화
+        self.seek_slider.setValue(0)
+        self.lbl_pos.setText("0:00")
+        self.lbl_dur.setText("0:00")
+
+        # RG 정보 초기화
+        self.lbl_rg_info.setText("—")
+        self.lbl_rg_info.setStyleSheet(
+            "color:transparent; font-size:11px; font-family:monospace;")
+
+        # 재생 버튼 아이콘 초기화
+        self.btn_play.set_icon("play")
+        self.btn_play.setEnabled(True)
+
+        # 미니 플레이어 초기화
+        if hasattr(self, 'mini_title'):
+            self.mini_title.setText("—")
+        if hasattr(self, 'mini_artist'):
+            self.mini_artist.setText(" ")
+        if hasattr(self, 'mini_seek'):
+            self.mini_seek.setValue(0)
+
     def _add_file_list(self, paths: list):
         # 이미 추가된 경로 집합
         existing = set()
@@ -1745,7 +1850,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.4")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.5")
 
         except Exception:
             pass
@@ -1864,7 +1969,7 @@ class HiFiPlayer(QMainWindow):
                 if track and hasattr(track, 'is_dsd') and track.is_dsd:
                     was_playing = (self.engine._state == 'playing')
                     pos = self.engine.current_position
-                    self._start_track(self.current_index)
+                    self._load_and_play(self.current_index)
                     if was_playing:
                         self.engine.seek(pos)
         except Exception as e:
