@@ -44,7 +44,7 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Nikon Chinge HiFi Music Player - Spatial")
+    app.setApplicationName("Eou, Sukon's HiFi Music Player")
     app.setApplicationVersion("1.0")
     app.setOrganizationName("HiFiPlayer")
 
