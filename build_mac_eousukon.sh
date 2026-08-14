@@ -160,13 +160,44 @@ for candidate in \
 done
 
 if [ -n "$FFMPEG_SRC" ]; then
-  cp "$FFMPEG_SRC" "$FFMPEG_DST"
-  chmod +x "$FFMPEG_DST"
-  echo "  ✓ ffmpeg 복사 완료: $FFMPEG_SRC → $FFMPEG_DST"
+  # ── arm64 슬라이스만 추출해 복사 ──────────────────────────────
+  # Intel(x86_64) 전용 ffmpeg가 섞이면 macOS가 "Intel 기반 앱 지원 종료"
+  # 경고를 띄우고, 향후 macOS에서 동작하지 않게 되므로 반드시 arm64로 맞춘다.
+  ARCHS="$(lipo -archs "$FFMPEG_SRC" 2>/dev/null || echo unknown)"
+  if echo "$ARCHS" | grep -q "arm64"; then
+    if [ "$(echo $ARCHS | wc -w)" -gt 1 ]; then
+      lipo "$FFMPEG_SRC" -thin arm64 -output "$FFMPEG_DST" 2>/dev/null \
+        && echo "  ✓ ffmpeg arm64 슬라이스 추출: $FFMPEG_SRC ($ARCHS)" \
+        || cp "$FFMPEG_SRC" "$FFMPEG_DST"
+    else
+      cp "$FFMPEG_SRC" "$FFMPEG_DST"
+      echo "  ✓ ffmpeg 복사 완료 (arm64): $FFMPEG_SRC"
+    fi
+    chmod +x "$FFMPEG_DST"
+  else
+    echo "  ⚠ 찾은 ffmpeg가 arm64가 아님 ($ARCHS) — 번들에서 제외합니다."
+    echo "    → Apple Silicon용 설치 후 재빌드 권장:"
+    echo "       arch -arm64 /opt/homebrew/bin/brew install ffmpeg"
+    echo "    (ffmpeg 없이도 DSD·FLAC·WAV·MP3 등 대부분 포맷은 정상 재생됩니다)"
+    rm -f "$FFMPEG_DST" 2>/dev/null || true
+  fi
 else
-  echo "  ⚠ ffmpeg를 찾을 수 없음 — APE 재생 불가 (brew install ffmpeg 후 재빌드 권장)"
+  echo "  ⚠ ffmpeg를 찾을 수 없음 — APE/WMA 재생 불가 (brew install ffmpeg 후 재빌드 권장)"
 fi
 
+# ── 번들 아키텍처 최종 검사 (Intel 잔여물 차단) ──────────────────
+echo "▶ 번들 아키텍처 검사..."
+INTEL_LEFT=$(find "$APP_PATH" -type f -perm +111 2>/dev/null | while read -r f; do
+  if file "$f" 2>/dev/null | grep -q "Mach-O"; then
+    if ! lipo -archs "$f" 2>/dev/null | grep -q "arm64"; then echo "$f"; fi
+  fi
+done)
+if [ -n "$INTEL_LEFT" ]; then
+  echo "  ⚠ arm64가 아닌 파일이 남아 있습니다:"
+  echo "$INTEL_LEFT" | sed 's/^/     /'
+else
+  echo "  ✓ 전체 arm64 전용 — Apple Silicon 네이티브"
+fi
 # ── 6. Info.plist 보완 ──────────────────────────────────────────
 echo "▶ Info.plist 수정..."
 INFO_PLIST="${APP_PATH}/Contents/Info.plist"
