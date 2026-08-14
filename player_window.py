@@ -50,6 +50,7 @@ from ui_widgets import (
     natural_sort_key,
 )
 
+
 class ClickJumpSliderStyle(QProxyStyle):
     """슬라이더 홈(groove) 클릭 시 핸들이 클릭 지점으로 바로 점프하는 스타일.
 
@@ -61,6 +62,14 @@ class ClickJumpSliderStyle(QProxyStyle):
         if hint == QStyle.SH_Slider_AbsoluteSetButtons:
             return int(Qt.LeftButton)
         return super().styleHint(hint, option, widget, returnData)
+
+
+def _apply_click_jump(slider: QSlider):
+    """슬라이더에 클릭-점프 스타일 적용 (proxy 수명은 슬라이더에 귀속)"""
+    proxy = ClickJumpSliderStyle(slider.style().objectName())
+    proxy.setParent(slider)   # QWidget.setStyle은 소유권을 갖지 않으므로 부모로 수명 관리
+    slider.setStyle(proxy)
+
 
 class HiFiPlayer(QMainWindow):
     _position_signal = pyqtSignal(float, float)
@@ -168,7 +177,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.5")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.6")
         self.setMinimumSize(920, 900)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -318,6 +327,13 @@ class HiFiPlayer(QMainWindow):
             f"color:transparent; font-size:10px; font-family:monospace;")
         self.lbl_detail2.hide()
         spec_vlay.addWidget(self.lbl_detail2)
+
+        # Now Playing 초기화용 기본 스타일 스냅샷 (재생 중 트랙 삭제 시 복원)
+        self._np_default_styles = {
+            'format':  self.lbl_format.styleSheet(),
+            'detail':  self.lbl_detail.styleSheet(),
+            'detail2': self.lbl_detail2.styleSheet(),
+        }
 
         lay.addWidget(spec_container)
         lay.addSpacing(6)
@@ -1107,7 +1123,7 @@ class HiFiPlayer(QMainWindow):
         return self.playlist.count()
 
     def open_files_from_external(self, paths: list):
-        """파일 연결(Finder/탐색기 더블클릭)·두 번째 인스턴스에서 전달된 파일 열기.
+        """파일 연결(탐색기 더블클릭)·두 번째 인스턴스에서 전달된 파일 열기.
 
         플레이리스트에 추가한 뒤 첫 파일을 즉시 재생한다.
         이미 리스트에 있는 파일이면 해당 행을 찾아 재생.
@@ -1127,12 +1143,6 @@ class HiFiPlayer(QMainWindow):
             if t and os.path.normcase(os.path.abspath(t.filepath)) in want:
                 self._load_and_play(i)
                 return
-
-def _apply_click_jump(slider: QSlider):
-    """슬라이더에 클릭-점프 스타일 적용 (proxy 수명은 슬라이더에 귀속)"""
-    proxy = ClickJumpSliderStyle(slider.style().objectName())
-    proxy.setParent(slider)   # QWidget.setStyle은 소유권을 갖지 않으므로 부모로 수명 관리
-    slider.setStyle(proxy)
 
     def _remove_tracks(self, rows: list):
         """여러 트랙 한번에 제거 (Shift/Ctrl 다중 선택) — current_index 보정"""
@@ -1850,7 +1860,7 @@ def _apply_click_jump(slider: QSlider):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.5")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.6")
 
         except Exception:
             pass
