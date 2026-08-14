@@ -147,15 +147,25 @@ APP_PATH="dist/${APP_NAME}.app"
 echo "▶ ffmpeg 번들 포함..."
 FFMPEG_DST="${APP_PATH}/Contents/MacOS/ffmpeg"
 FFMPEG_SRC=""
+# arm64를 포함한 ffmpeg를 우선 선택 (Intel 전용을 먼저 잡아 멈추던 문제 수정)
 for candidate in \
-  "$(which ffmpeg 2>/dev/null)" \
   "/opt/homebrew/bin/ffmpeg" \
+  "$(which ffmpeg 2>/dev/null)" \
   "/usr/local/bin/ffmpeg"; do
-  if [ -f "$candidate" ]; then
+  if [ -f "$candidate" ] && lipo -archs "$candidate" 2>/dev/null | grep -q "arm64"; then
     FFMPEG_SRC="$candidate"
     break
   fi
 done
+# arm64가 하나도 없으면 마지막 후보라도 잡아 안내 메시지를 내보낸다
+if [ -z "$FFMPEG_SRC" ]; then
+  for candidate in \
+    "$(which ffmpeg 2>/dev/null)" \
+    "/opt/homebrew/bin/ffmpeg" \
+    "/usr/local/bin/ffmpeg"; do
+    if [ -f "$candidate" ]; then FFMPEG_SRC="$candidate"; break; fi
+  done
+fi
 
 if [ -n "$FFMPEG_SRC" ]; then
   # ── arm64 슬라이스만 추출해 복사 ──────────────────────────────
