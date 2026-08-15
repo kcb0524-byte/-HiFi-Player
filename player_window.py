@@ -225,33 +225,28 @@ class HiFiPlayer(QMainWindow):
         self._auth_busy = False
         if hasattr(self, 'lbl_auth'):
             self.lbl_auth.hide()
-            self.lbl_auth_detail.hide()
 
     def _on_auth_result(self, res: dict):
         if not self._auth_enabled or not hasattr(self, 'lbl_auth'):
             return
-        level = res.get('level', 'info')
         color = res.get('color', '#8888aa')
-        self.lbl_auth.setText(f"감별: {res.get('verdict', '?')}")
+        self.lbl_auth.setText(res.get('verdict', '?'))
         self.lbl_auth.setStyleSheet(
-            f"color:{color}; font-size:11px; font-weight:bold; "
-            f"border:1px solid {color}; border-radius:8px; padding:1px 8px;")
-        self.lbl_auth_detail.setText(res.get('detail', ''))
-        self.lbl_auth_detail.setStyleSheet(
-            f"color:{DARK['text_dim']}; font-size:10px;")
+            f"color:{color}; font-size:10px; font-weight:bold; "
+            f"border:1px solid {color}; border-radius:9px; padding:0px 8px;")
+        self.lbl_auth.setToolTip(f"음원 감별: {res.get('detail', '')}")
         self.lbl_auth.show()
-        self.lbl_auth_detail.show()
 
     # ─────────────────────────────────────────────
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8")
-        self.setMinimumSize(920, 900)
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.1")
+        self.setMinimumSize(920, 940)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
         screen_h = QDesktopWidget().availableGeometry().height()
-        win_h = min(1100, int(screen_h * 0.92))
+        win_h = min(1160, int(screen_h * 0.92))
         self._normal_size = (1120, win_h)
         self.resize(1120, win_h)
         self.setStyleSheet(STYLESHEET)
@@ -386,6 +381,13 @@ class HiFiPlayer(QMainWindow):
 
         spec_row.addWidget(self.lbl_format)
         spec_row.addWidget(self.lbl_detail)
+
+        # 음원 감별 배지 — 같은 행에 인라인 배치 (상세 근거는 툴팁)
+        self.lbl_auth = QLabel()
+        self.lbl_auth.setFixedHeight(20)
+        self.lbl_auth.setAlignment(Qt.AlignCenter)
+        self.lbl_auth.hide()
+        spec_row.addWidget(self.lbl_auth)
         spec_vlay.addLayout(spec_row)
 
         # 2행 (출력 SR / 소스 — DSD 또는 업샘플 시에만 표시)
@@ -397,20 +399,6 @@ class HiFiPlayer(QMainWindow):
         self.lbl_detail2.hide()
         spec_vlay.addWidget(self.lbl_detail2)
 
-        # ── 음원 감별 배지 + 상세 ──
-        self.lbl_auth = QLabel()
-        self.lbl_auth.setAlignment(Qt.AlignCenter)
-        self.lbl_auth.hide()
-        auth_row = QHBoxLayout()
-        auth_row.addStretch(1)
-        auth_row.addWidget(self.lbl_auth)
-        auth_row.addStretch(1)
-        spec_vlay.addLayout(auth_row)
-        self.lbl_auth_detail = QLabel()
-        self.lbl_auth_detail.setAlignment(Qt.AlignCenter)
-        self.lbl_auth_detail.setWordWrap(True)
-        self.lbl_auth_detail.hide()
-        spec_vlay.addWidget(self.lbl_auth_detail)
 
         # Now Playing 초기화용 기본 스타일 스냅샷 (재생 중 트랙 삭제 시 복원)
         self._np_default_styles = {
@@ -612,7 +600,7 @@ class HiFiPlayer(QMainWindow):
 
         # ── HiFi Options ───────────────────────────────────────
         lay.addWidget(self._section_label("HiFi Options"))
-        lay.addSpacing(4)
+        lay.addSpacing(2)
 
         def _opt_row(label, desc, toggle):
             row = QHBoxLayout()
@@ -629,22 +617,22 @@ class HiFiPlayer(QMainWindow):
         self.toggle_bp = ToggleSwitch(checked=False)
         self.toggle_bp.toggled.connect(self._on_bit_perfect_toggled)
         lay.addLayout(_opt_row("Bit Perfect", "EQ·RG·Volume bypass", self.toggle_bp))
-        lay.addSpacing(4)
+        lay.addSpacing(2)
 
         self.toggle_dither = ToggleSwitch(checked=True)
         self.toggle_dither.toggled.connect(lambda on: self.engine.set_dither_enabled(on))
         lay.addLayout(_opt_row("TPDF Dithering", "Bit depth noise shaping", self.toggle_dither))
-        lay.addSpacing(4)
+        lay.addSpacing(2)
 
         self.toggle_dop = ToggleSwitch(checked=False)
         self.toggle_dop.toggled.connect(self._on_dop_toggled)
         lay.addLayout(_opt_row("DoP Mode", "DSD over PCM (DAC 지원 필요)", self.toggle_dop))
-        lay.addSpacing(4)
+        lay.addSpacing(2)
 
         self.toggle_spatial = ToggleSwitch(checked=False)
         self.toggle_spatial.toggled.connect(self._on_spatial_toggled)
         lay.addLayout(_opt_row("Spatial Audio", "공간 음향 (헤드폰 권장)", self.toggle_spatial))
-        lay.addSpacing(4)
+        lay.addSpacing(2)
 
         sp_row = QHBoxLayout()
         sp_row.setSpacing(8)
@@ -658,12 +646,12 @@ class HiFiPlayer(QMainWindow):
         sp_row.addWidget(sp_lbl)
         sp_row.addWidget(self.combo_spatial, 1)
         lay.addLayout(sp_row)
-        lay.addSpacing(6)
+        lay.addSpacing(3)
 
         self.toggle_auth = ToggleSwitch(checked=True)
         self.toggle_auth.toggled.connect(self._on_auth_toggled)
         lay.addLayout(_opt_row("음원 감별", "재생 시 진위 자동 판정 표시", self.toggle_auth))
-        lay.addSpacing(4)
+        lay.addSpacing(2)
 
         # ── 테마 선택 ──
         th_row = QHBoxLayout()
@@ -681,7 +669,7 @@ class HiFiPlayer(QMainWindow):
         th_row.addWidget(th_lbl)
         th_row.addWidget(self.combo_theme, 1)
         lay.addLayout(th_row)
-        lay.addSpacing(6)
+        lay.addSpacing(3)
 
         sr_row = QHBoxLayout()
         sr_row.setSpacing(8)
@@ -1950,7 +1938,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.1")
 
         except Exception:
             pass
