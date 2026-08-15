@@ -30,7 +30,7 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 APP_NAME="ESKHiFiMusicPlayer"
 BUNDLE_ID="com.twsemicon.hifi-player-eousukon"
-VERSION="1.8.1"
+VERSION="1.8.2"
 ICON="icon.icns"
 
 # ── Python 환경 확인 및 통일 ─────────────────────────────────────

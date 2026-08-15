@@ -189,7 +189,7 @@ class HiFiPlayer(QMainWindow):
                         self._auth_buf = []
                         import threading as _th
                         _th.Thread(target=self._run_authenticity,
-                                   args=(sr, samples), daemon=True).start()
+                                   args=(sample_rate, samples), daemon=True).start()
             except Exception:
                 pass
 
