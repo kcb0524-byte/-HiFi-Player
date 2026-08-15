@@ -147,11 +147,22 @@ def analyze_stream(sr: int, mono: np.ndarray, *,
         verdict, level, detail = _judge_dsd(freqs, lin, cutoff,
                                             dsd_label or 'DSD')
     else:
-        valid = pdb >= mdb - 70.0
+        # 업샘플링 재생 중에도 정확히 판정하기 위해 '파일이 선언한 SR' 기준으로
+        # 대역을 제한해 분석한다 (업샘플링은 원본 나이퀴스트 아래를 보존하므로,
+        # 그 위의 리샘플러 잔여 성분은 판정에서 제외).
+        dsr = declared_sr or sr
+        dnyq = dsr / 2.0
+        if dnyq < nyq:
+            band = freqs <= dnyq * 1.02
+            bf, bdb = freqs[band], pdb[band]
+        else:
+            bf, bdb = freqs, pdb
+        bmax = float(bdb.max()) if len(bdb) else mdb
+        valid = bdb >= bmax - 70.0
         idx = np.where(valid)[0]
-        cutoff = float(freqs[idx[-1]]) if len(idx) else 0.0
-        ratio = cutoff / nyq if nyq > 0 else 0.0
-        verdict, level, detail = _judge_pcm(declared_sr or sr, cutoff, nyq, ratio)
+        cutoff = float(bf[idx[-1]]) if len(idx) else 0.0
+        ratio = cutoff / dnyq if dnyq > 0 else 0.0
+        verdict, level, detail = _judge_pcm(dsr, cutoff, dnyq, ratio)
 
     return dict(verdict=verdict, level=level,
                 color=LEVEL_COLOR.get(level, LEVEL_COLOR['info']),

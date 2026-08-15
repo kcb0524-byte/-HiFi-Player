@@ -87,7 +87,7 @@ class HiFiPlayer(QMainWindow):
         self.engine = AudioEngine()
         self.current_index: int = -1
         self.current_info: dict = {}
-        # ── 음원 감별 상태 ──
+        # ── 음원 분석 상태 ──
         self._auth_enabled = True
         self._auth_buf = []          # 모노 샘플 조각들
         self._auth_count = 0
@@ -174,12 +174,15 @@ class HiFiPlayer(QMainWindow):
                 self._freq_signal.emit(band_levels)
             except Exception:
                 pass
-            # ── 음원 감별용 샘플 수집 (DoP·업샘플링 재생 시 제외) ──
+            # ── 음원 분석용 샘플 수집 ──
+            # PCM은 업샘플링 재생 중에도 분석 (선언 SR 기준 판정으로 정확도 유지)
+            # DSD만 예외: 업샘플링 절벽이 PCM 전사 흔적과 구분 불가 → 원본 재생 시 분석
             try:
                 if (self._auth_enabled and not self._auth_done
                         and not self._auth_busy
                         and not (self.engine._dop_mode and self.engine._is_dsd)
-                        and self.engine._fixed_output_sr == 0):
+                        and not (self.engine._is_dsd
+                                 and self.engine._fixed_output_sr > 0)):
                     mono = chunk.mean(axis=1) if chunk.ndim == 2 else chunk
                     self._auth_buf.append(np.asarray(mono, dtype=np.float64))
                     self._auth_count += len(mono)
@@ -201,12 +204,13 @@ class HiFiPlayer(QMainWindow):
         self._auth_signal.connect(self._on_auth_result)
 
     def _run_authenticity(self, sr: int, samples):
-        """백그라운드 감별 (오디오 콜백 밖에서 FFT 수행)"""
+        """백그라운드 분석 (오디오 콜백 밖에서 FFT 수행)"""
         try:
             info = self.current_info or {}
             res = authenticity.analyze_stream(
                 sr, samples,
-                declared_sr=int(getattr(self.engine, '_sample_rate', 0) or 0),
+                declared_sr=int(info.get('original_sample_rate', 0)
+                                or getattr(self.engine, '_sample_rate', 0) or 0),
                 is_dsd=bool(getattr(self.engine, '_is_dsd', False)),
                 dsd_label=str(info.get('dsd_rate', '') or 'DSD'),
             )
@@ -218,7 +222,7 @@ class HiFiPlayer(QMainWindow):
             self._auth_busy = False
 
     def _reset_authenticity(self):
-        """곡 전환 시 감별 상태·표시 초기화"""
+        """곡 전환 시 분석 상태·표시 초기화"""
         self._auth_buf = []
         self._auth_count = 0
         self._auth_done = False
@@ -233,17 +237,17 @@ class HiFiPlayer(QMainWindow):
         verdict = res.get('verdict', '?')
         detail = res.get('detail', '')
         self.lbl_auth.setText(
-            f'<span style="color:{color}; font-weight:bold;">● 감별: {verdict}</span>'
+            f'<span style="color:{color}; font-weight:bold;">● {verdict}</span>'
             f'<span style="color:{DARK["text_dim"]};">&nbsp;&nbsp;{detail}</span>')
         self.lbl_auth.setStyleSheet("font-size:11px;")
-        self.lbl_auth.setToolTip(f"음원 감별: {detail}")
+        self.lbl_auth.setToolTip(f"음원 분석: {detail}")
         self.lbl_auth.show()
 
     # ─────────────────────────────────────────────
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.3")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.4")
         self.setMinimumSize(920, 940)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -385,7 +389,7 @@ class HiFiPlayer(QMainWindow):
         spec_row.addWidget(self.lbl_detail)
         spec_vlay.addLayout(spec_row)
 
-        # 음원 감별 결과 — 전용 한 줄 (판정 + 근거 전체 표시, 스펙 줄 침범 없음)
+        # 음원 분석 결과 — 전용 한 줄 (판정 + 근거 전체 표시, 스펙 줄 침범 없음)
         self.lbl_auth = QLabel()
         self.lbl_auth.setFixedHeight(17)
         self.lbl_auth.setAlignment(Qt.AlignCenter)
@@ -653,7 +657,7 @@ class HiFiPlayer(QMainWindow):
 
         self.toggle_auth = ToggleSwitch(checked=True)
         self.toggle_auth.toggled.connect(self._on_auth_toggled)
-        lay.addLayout(_opt_row("음원 감별", "재생 시 진위 자동 판정 표시", self.toggle_auth))
+        lay.addLayout(_opt_row("음원 분석", "재생 시 진위 자동 판정 표시", self.toggle_auth))
         lay.addSpacing(2)
 
         # ── 테마 선택 ──
@@ -1941,7 +1945,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.3")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.4")
 
         except Exception:
             pass
