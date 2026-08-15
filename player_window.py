@@ -189,7 +189,7 @@ class HiFiPlayer(QMainWindow):
                         self._auth_buf = []
                         import threading as _th
                         _th.Thread(target=self._run_authenticity,
-                                   args=(sr, samples), daemon=True).start()
+                                   args=(sample_rate, samples), daemon=True).start()
             except Exception:
                 pass
 
@@ -241,7 +241,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.1")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.2")
         self.setMinimumSize(920, 940)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -1938,7 +1938,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.1")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.2")
 
         except Exception:
             pass
