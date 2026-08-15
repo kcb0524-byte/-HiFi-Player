@@ -230,18 +230,20 @@ class HiFiPlayer(QMainWindow):
         if not self._auth_enabled or not hasattr(self, 'lbl_auth'):
             return
         color = res.get('color', '#8888aa')
-        self.lbl_auth.setText(res.get('verdict', '?'))
-        self.lbl_auth.setStyleSheet(
-            f"color:{color}; font-size:10px; font-weight:bold; "
-            f"border:1px solid {color}; border-radius:9px; padding:0px 8px;")
-        self.lbl_auth.setToolTip(f"음원 감별: {res.get('detail', '')}")
+        verdict = res.get('verdict', '?')
+        detail = res.get('detail', '')
+        self.lbl_auth.setText(
+            f'<span style="color:{color}; font-weight:bold;">● 감별: {verdict}</span>'
+            f'<span style="color:{DARK["text_dim"]};">&nbsp;&nbsp;{detail}</span>')
+        self.lbl_auth.setStyleSheet("font-size:11px;")
+        self.lbl_auth.setToolTip(f"음원 감별: {detail}")
         self.lbl_auth.show()
 
     # ─────────────────────────────────────────────
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.2")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.3")
         self.setMinimumSize(920, 940)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -381,14 +383,15 @@ class HiFiPlayer(QMainWindow):
 
         spec_row.addWidget(self.lbl_format)
         spec_row.addWidget(self.lbl_detail)
-
-        # 음원 감별 배지 — 같은 행에 인라인 배치 (상세 근거는 툴팁)
-        self.lbl_auth = QLabel()
-        self.lbl_auth.setFixedHeight(20)
-        self.lbl_auth.setAlignment(Qt.AlignCenter)
-        self.lbl_auth.hide()
-        spec_row.addWidget(self.lbl_auth)
         spec_vlay.addLayout(spec_row)
+
+        # 음원 감별 결과 — 전용 한 줄 (판정 + 근거 전체 표시, 스펙 줄 침범 없음)
+        self.lbl_auth = QLabel()
+        self.lbl_auth.setFixedHeight(17)
+        self.lbl_auth.setAlignment(Qt.AlignCenter)
+        self.lbl_auth.setTextFormat(Qt.RichText)
+        self.lbl_auth.hide()
+        spec_vlay.addWidget(self.lbl_auth)
 
         # 2행 (출력 SR / 소스 — DSD 또는 업샘플 시에만 표시)
         self.lbl_detail2 = QLabel("")
@@ -1938,7 +1941,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.2")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.3")
 
         except Exception:
             pass
