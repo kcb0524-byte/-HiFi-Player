@@ -42,6 +42,7 @@ from sacd_decoder import SACDDecoder
 from upnp_browser import UPnPDialog
 
 
+import authenticity
 from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET
 from ui_widgets import (
     TrackLoader, MarqueeLabel, CDWidget, EQGraph, PresetPanel, EQPanel,
@@ -77,6 +78,7 @@ class HiFiPlayer(QMainWindow):
     _error_signal = pyqtSignal(str)
     _vu_signal = pyqtSignal(float, float)
     _freq_signal = pyqtSignal(list)
+    _auth_signal = pyqtSignal(dict)
 
     SETTINGS_FILE = str(Path.home() / '.hifi_player_settings.json')
 
@@ -85,6 +87,12 @@ class HiFiPlayer(QMainWindow):
         self.engine = AudioEngine()
         self.current_index: int = -1
         self.current_info: dict = {}
+        # ── 음원 감별 상태 ──
+        self._auth_enabled = True
+        self._auth_buf = []          # 모노 샘플 조각들
+        self._auth_count = 0
+        self._auth_busy = False
+        self._auth_done = False
         self._loader: Optional[TrackLoader] = None
         self._seeking = False
         self._is_sacd_playing = False
@@ -166,18 +174,79 @@ class HiFiPlayer(QMainWindow):
                 self._freq_signal.emit(band_levels)
             except Exception:
                 pass
+            # ── 음원 감별용 샘플 수집 (DoP·업샘플링 재생 시 제외) ──
+            try:
+                if (self._auth_enabled and not self._auth_done
+                        and not self._auth_busy
+                        and not (self.engine._dop_mode and self.engine._is_dsd)
+                        and self.engine._fixed_output_sr == 0):
+                    mono = chunk.mean(axis=1) if chunk.ndim == 2 else chunk
+                    self._auth_buf.append(np.asarray(mono, dtype=np.float64))
+                    self._auth_count += len(mono)
+                    if self._auth_count >= authenticity.NEED_SAMPLES:
+                        self._auth_busy = True
+                        samples = np.concatenate(self._auth_buf)
+                        self._auth_buf = []
+                        import threading as _th
+                        _th.Thread(target=self._run_authenticity,
+                                   args=(sr, samples), daemon=True).start()
+            except Exception:
+                pass
 
         self.engine.on_position_changed = pos_cb
         self.engine.on_playback_finished = fin_cb
         self.engine.on_error = err_cb
         self.engine.on_vu_level = vu_cb
         self.engine.on_chunk_ready = chunk_cb
+        self._auth_signal.connect(self._on_auth_result)
+
+    def _run_authenticity(self, sr: int, samples):
+        """백그라운드 감별 (오디오 콜백 밖에서 FFT 수행)"""
+        try:
+            info = self.current_info or {}
+            res = authenticity.analyze_stream(
+                sr, samples,
+                declared_sr=int(getattr(self.engine, '_sample_rate', 0) or 0),
+                is_dsd=bool(getattr(self.engine, '_is_dsd', False)),
+                dsd_label=str(info.get('dsd_rate', '') or 'DSD'),
+            )
+            self._auth_signal.emit(res)
+        except Exception:
+            pass
+        finally:
+            self._auth_done = True
+            self._auth_busy = False
+
+    def _reset_authenticity(self):
+        """곡 전환 시 감별 상태·표시 초기화"""
+        self._auth_buf = []
+        self._auth_count = 0
+        self._auth_done = False
+        self._auth_busy = False
+        if hasattr(self, 'lbl_auth'):
+            self.lbl_auth.hide()
+            self.lbl_auth_detail.hide()
+
+    def _on_auth_result(self, res: dict):
+        if not self._auth_enabled or not hasattr(self, 'lbl_auth'):
+            return
+        level = res.get('level', 'info')
+        color = res.get('color', '#8888aa')
+        self.lbl_auth.setText(f"감별: {res.get('verdict', '?')}")
+        self.lbl_auth.setStyleSheet(
+            f"color:{color}; font-size:11px; font-weight:bold; "
+            f"border:1px solid {color}; border-radius:8px; padding:1px 8px;")
+        self.lbl_auth_detail.setText(res.get('detail', ''))
+        self.lbl_auth_detail.setStyleSheet(
+            f"color:{DARK['text_dim']}; font-size:10px;")
+        self.lbl_auth.show()
+        self.lbl_auth_detail.show()
 
     # ─────────────────────────────────────────────
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.7.6")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8")
         self.setMinimumSize(920, 900)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -327,6 +396,21 @@ class HiFiPlayer(QMainWindow):
             f"color:transparent; font-size:10px; font-family:monospace;")
         self.lbl_detail2.hide()
         spec_vlay.addWidget(self.lbl_detail2)
+
+        # ── 음원 감별 배지 + 상세 ──
+        self.lbl_auth = QLabel()
+        self.lbl_auth.setAlignment(Qt.AlignCenter)
+        self.lbl_auth.hide()
+        auth_row = QHBoxLayout()
+        auth_row.addStretch(1)
+        auth_row.addWidget(self.lbl_auth)
+        auth_row.addStretch(1)
+        spec_vlay.addLayout(auth_row)
+        self.lbl_auth_detail = QLabel()
+        self.lbl_auth_detail.setAlignment(Qt.AlignCenter)
+        self.lbl_auth_detail.setWordWrap(True)
+        self.lbl_auth_detail.hide()
+        spec_vlay.addWidget(self.lbl_auth_detail)
 
         # Now Playing 초기화용 기본 스타일 스냅샷 (재생 중 트랙 삭제 시 복원)
         self._np_default_styles = {
@@ -575,6 +659,11 @@ class HiFiPlayer(QMainWindow):
         sp_row.addWidget(self.combo_spatial, 1)
         lay.addLayout(sp_row)
         lay.addSpacing(6)
+
+        self.toggle_auth = ToggleSwitch(checked=True)
+        self.toggle_auth.toggled.connect(self._on_auth_toggled)
+        lay.addLayout(_opt_row("음원 감별", "재생 시 진위 자동 판정 표시", self.toggle_auth))
+        lay.addSpacing(4)
 
         # ── 테마 선택 ──
         th_row = QHBoxLayout()
@@ -1421,6 +1510,7 @@ class HiFiPlayer(QMainWindow):
 
     def _on_track_loaded(self, info: dict):
         self.current_info = info
+        self._reset_authenticity()
         self.btn_play.setEnabled(True)
         self._update_info_display(info)
         self.engine.play()
@@ -1860,7 +1950,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.7.6")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8")
 
         except Exception:
             pass
@@ -1997,6 +2087,11 @@ class HiFiPlayer(QMainWindow):
                 self, "DoP 전환 실패",
                 f"DoP 모드 전환 중 오류가 발생해 DoP를 해제했습니다.\n\n{e}\n\n"
                 "현재 출력 장치가 DoP(DSD over PCM)를 지원하지 않을 수 있습니다.")
+
+    def _on_auth_toggled(self, on: bool):
+        self._auth_enabled = on
+        if not on:
+            self._reset_authenticity()
 
     def _on_spatial_toggled(self, on: bool):
         self.engine.set_spatial_enabled(on)
@@ -2150,6 +2245,9 @@ class HiFiPlayer(QMainWindow):
             self.engine.set_fixed_output_sr(self._UPSAMPLE_SR.get(ups_idx, 0))
             self.toggle_dop.setChecked(dop_on)
             self.engine.set_dop_mode(dop_on)
+            auth_on = data.get('auth_enabled', True)
+            self.toggle_auth.setChecked(auth_on)
+            self._auth_enabled = auth_on
             spatial_on = data.get('spatial', False)
             self.toggle_spatial.setChecked(spatial_on)
             self.engine.set_spatial_enabled(spatial_on)
@@ -2249,6 +2347,7 @@ class HiFiPlayer(QMainWindow):
                 'eq_db_range':    self.eq_panel.get_db_range(),
                 'dop_mode':       self.toggle_dop.isChecked(),
                 'spatial':        self.toggle_spatial.isChecked(),
+                'auth_enabled':   self.toggle_auth.isChecked(),
                 'spatial_mode_idx': self.combo_spatial.currentIndex(),
                 'theme':          __import__('constants').CURRENT_THEME,
                 # 출력 장치

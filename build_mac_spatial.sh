@@ -30,7 +30,7 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 APP_NAME="Nikon Chinge HiFi Player Spatial"
 BUNDLE_ID="com.twsemicon.hifi-player-spatial"
-VERSION="1.7.6"
+VERSION="1.8.0"
 ICON="icon.icns"
 
 # ── Python 환경 확인 및 통일 ─────────────────────────────────────
@@ -92,6 +92,7 @@ ${PYINSTALLER} \
   --add-data      "player_window.py:." \
   --add-data      "audio_engine.py:." \
   --add-data      "spatial_audio.py:." \
+  --add-data      "authenticity.py:." \
   --add-data      "spatial_hrir.npz:." \
   --add-data      "dsd_decoder.py:." \
   --add-data      "sacd_decoder.py:." \
