@@ -47,6 +47,11 @@ from dsd_decoder import DSDDecoder
 
 from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET
 
+# LP 센터 레이블 문구 (에디션별 교체 지점 — 헌정판: EOU SUKON / MUSIC)
+LP_LABEL_TOP = "EOU SUKON"
+LP_LABEL_SUB = "MUSIC"
+
+
 class TrackLoader(QThread):
     loaded = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -251,27 +256,34 @@ class CDWidget(QWidget):
         p.drawEllipse(QPoint(0, 0), lr, lr)
 
         # ── 5. 레이블 텍스트 — LP와 함께 회전 ──────────────────
-        # 상단: ZUNAS, 하단: Player  (구멍 위/아래로 충분히 분리)
+        # 상단/하단 문구는 모듈 상수 (헌정판 등 에디션별 교체 지점)
         fnt_top = QFont('Arial', max(5, int(lr * 0.30)), QFont.Bold)
         fnt_sub = QFont('Arial', max(4, int(lr * 0.24)))
+        # 레이블 원 지름 안에 들어가도록 폭 기준 자동 축소
+        while (fnt_top.pointSize() > 4
+               and QFontMetrics(fnt_top).horizontalAdvance(LP_LABEL_TOP) > lr * 1.7):
+            fnt_top.setPointSize(fnt_top.pointSize() - 1)
+        while (fnt_sub.pointSize() > 4
+               and QFontMetrics(fnt_sub).horizontalAdvance(LP_LABEL_SUB) > lr * 1.7):
+            fnt_sub.setPointSize(fnt_sub.pointSize() - 1)
         fm_top = QFontMetrics(fnt_top)
         fm_sub = QFontMetrics(fnt_sub)
         hole_r = int(r * 0.055)  # 구멍 반지름 (6번 단계와 동일 비율)
 
-        # ZUNAS — 구멍 위쪽, 여유 있게
+        # 상단 문구 — 구멍 위쪽, 여유 있게
         p.setFont(fnt_top)
         p.setPen(QColor(DARK['accent']).darker(400))
-        tw = fm_top.horizontalAdvance("ZUNAS")
+        tw = fm_top.horizontalAdvance(LP_LABEL_TOP)
         # 텍스트 baseline이 구멍 상단에서 4px 위에 오도록
         y_top = -(hole_r + 4 + fm_top.descent())
-        p.drawText(int(-tw / 2), y_top, "ZUNAS")
+        p.drawText(int(-tw / 2), y_top, LP_LABEL_TOP)
 
-        # Player — 구멍 아래쪽, 여유 있게
+        # 하단 문구 — 구멍 아래쪽, 여유 있게
         p.setFont(fnt_sub)
         p.setPen(QColor(DARK['accent']).darker(260))
-        tw2 = fm_sub.horizontalAdvance("Player")
+        tw2 = fm_sub.horizontalAdvance(LP_LABEL_SUB)
         y_bot = hole_r + 4 + fm_sub.ascent()
-        p.drawText(int(-tw2 / 2), y_bot, "Player")
+        p.drawText(int(-tw2 / 2), y_bot, LP_LABEL_SUB)
 
         # ── 6. 중앙 스핀들 구멍 ─────────────────────────────────
         hole_r = int(r * 0.055)

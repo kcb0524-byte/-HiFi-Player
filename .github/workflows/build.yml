@@ -132,12 +132,12 @@ jobs:
           #pragma encoding "utf-8"
           [Setup]
           AppName=Eou, Sukon's HiFi Music Player
-          AppVersion=1.8.6
+          AppVersion=1.8.7
           AppPublisher=Choongbae Kim
           DefaultDirName={autopf}\Eou Sukon HiFi Player
           DefaultGroupName=Eou Sukon HiFi Player
           OutputDir=dist
-          OutputBaseFilename=ESKHiFiMusicPlayer_Setup_1.8.6
+          OutputBaseFilename=ESKHiFiMusicPlayer_Setup_1.8.7
           SetupIconFile=icon.ico
           Compression=lzma2
           SolidCompression=yes
@@ -192,7 +192,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer-eousukon
-          path: dist/ESKHiFiMusicPlayer_Setup_1.8.6.exe
+          path: dist/ESKHiFiMusicPlayer_Setup_1.8.7.exe
           retention-days: 30
 
   # ── macOS 빌드 (Apple Silicon) ─────────────────────────────────
@@ -333,11 +333,11 @@ jobs:
           hdiutil create -volname "Eou Sukon HiFi Player" \
             -srcfolder "dist/ESKHiFiMusicPlayer.app" \
             -ov -format UDZO \
-            "dist/ESKHiFiMusicPlayer-1.8.6-arm64.dmg"
+            "dist/ESKHiFiMusicPlayer-1.8.7-arm64.dmg"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-eousukon
-          path: dist/ESKHiFiMusicPlayer-1.8.6-arm64.dmg
+          path: dist/ESKHiFiMusicPlayer-1.8.7-arm64.dmg
           retention-days: 30
