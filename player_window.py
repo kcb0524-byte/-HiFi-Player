@@ -192,6 +192,7 @@ class HiFiPlayer(QMainWindow):
                         self._auth_busy = True
                         samples = np.concatenate(self._auth_buf)
                         self._auth_buf = []
+                        self._auth_count = 0   # 다음 구간을 처음부터 다시 누적
                         import threading as _th
                         _th.Thread(target=self._run_authenticity,
                                    args=(sample_rate, samples), daemon=True).start()
