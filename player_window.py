@@ -93,6 +93,8 @@ class HiFiPlayer(QMainWindow):
         self._auth_count = 0
         self._auth_busy = False
         self._auth_done = False
+        self._auth_runs = 0          # 지금까지 판정한 구간 수
+        self._auth_best = None       # 최고 측정치 (컷오프 최대 구간)
         self._loader: Optional[TrackLoader] = None
         self._seeking = False
         self._is_sacd_playing = False
@@ -204,8 +206,16 @@ class HiFiPlayer(QMainWindow):
         self._auth_signal.connect(self._on_auth_result)
 
     def _run_authenticity(self, sr: int, samples):
-        """백그라운드 분석 (오디오 콜백 밖에서 FFT 수행)"""
+        """백그라운드 분석 (오디오 콜백 밖에서 FFT 수행)
+
+        조용한 도입부(피아노 솔로 등)는 고주파가 원래 없어 컷오프가 낮게
+        측정되므로, 한 구간으로 확정하지 않고 재생 중 여러 구간을 분석해
+        컷오프가 가장 높은(=음악 에너지가 충분한) 구간의 결과를 채택한다."""
         try:
+            # 무음·저에너지 구간은 판정에 사용하지 않음 (구간 수에도 미포함)
+            rms = float(np.sqrt(np.mean(np.square(samples))))
+            if rms < 1e-4:
+                return
             info = self.current_info or {}
             res = authenticity.analyze_stream(
                 sr, samples,
@@ -214,11 +224,17 @@ class HiFiPlayer(QMainWindow):
                 is_dsd=bool(getattr(self.engine, '_is_dsd', False)),
                 dsd_label=str(info.get('dsd_rate', '') or 'DSD'),
             )
-            self._auth_signal.emit(res)
+            self._auth_runs += 1
+            best = self._auth_best
+            if (best is None
+                    or res.get('cutoff_khz', 0.0) > best.get('cutoff_khz', 0.0)):
+                self._auth_best = res
+                self._auth_signal.emit(res)
+            if self._auth_runs >= 6:      # 약 18초 분량이면 충분
+                self._auth_done = True
         except Exception:
             pass
         finally:
-            self._auth_done = True
             self._auth_busy = False
 
     def _reset_authenticity(self):
@@ -227,6 +243,8 @@ class HiFiPlayer(QMainWindow):
         self._auth_count = 0
         self._auth_done = False
         self._auth_busy = False
+        self._auth_runs = 0
+        self._auth_best = None
         if hasattr(self, 'lbl_auth'):
             self.lbl_auth.hide()
 
