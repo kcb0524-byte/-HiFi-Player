@@ -106,6 +106,10 @@ def _parse_master_toc(f) -> Optional[Dict]:
         twoch_size = struct.unpack_from('>I', sec, 0x44)[0]
         mulch_lsn  = struct.unpack_from('>I', sec, 0x50)[0]
         mulch_size = struct.unpack_from('>I', sec, 0x54)[0]
+        # 스펙상 0x44는 실제로는 2ch Area '끝 LSN'인 디스크가 많음 (Hewitt 등 실측 확인)
+        # 0x48/0x4c = 멀티채널 Area 시작/끝 — 마지막 트랙 크기 계산에 사용
+        twoch_end  = twoch_size if twoch_size > twoch_lsn else 0
+        mulch_end  = struct.unpack_from('>I', sec, 0x4c)[0]
 
         # Album title (offset 0x12 부터 ASCII/UTF-8 패딩)
         album_title = ''
@@ -120,6 +124,8 @@ def _parse_master_toc(f) -> Optional[Dict]:
             'twoch_size':  twoch_size,
             'mulch_lsn':   mulch_lsn,
             'mulch_size':  mulch_size,
+            'twoch_end':   twoch_end,
+            'mulch_end':   mulch_end,
             'album_title': album_title,
             'master_lsn':  lsn,
         }
@@ -127,7 +133,7 @@ def _parse_master_toc(f) -> Optional[Dict]:
         return None
 
 
-def _parse_area_toc(f, area_lsn: int) -> Optional[Dict]:
+def _parse_area_toc(f, area_lsn: int, area_end: int = 0) -> Optional[Dict]:
     """Area TOC에서 트랙 목록 추출
 
     실제 SACD ISO Area TOC 레이아웃 (hex 덤프 기반):
@@ -257,14 +263,46 @@ def _parse_area_toc(f, area_lsn: int) -> Optional[Dict]:
                     continue
                 off += 4
 
-            # 인접 LSN 차이로 트랙 크기 계산 (마지막 값은 end marker)
-            # lsn_list = [start1, start2, ..., startN, end_marker]
-            for i in range(len(lsn_list) - 1):
-                lsn_s = lsn_list[i]
-                lsn_e = lsn_list[i + 1]
-                size  = lsn_e - lsn_s
-                if size > 0 and lsn_s < total_sectors:
-                    raw_tracks.append({'lsn': lsn_s, 'size': size})
+            # ── 마지막 값이 '끝 표시'인지 '실제 마지막 트랙 시작'인지 판별 ──
+            # SACDTRL2 타임코드 개수 = 실제 트랙 수.
+            #   TRL1 개수 == TRL2 개수      → 끝 표시 없음 (전부 트랙 시작점)
+            #   TRL1 개수 == TRL2 개수 + 1  → 마지막은 끝 표시 (기존 동작)
+            # (Hyperion 등 일부 디스크는 끝 표시가 없어 마지막 곡이 누락되던 버그 수정)
+            n_tc = 0
+            for i2 in range(1, 10):
+                s2 = blob[i2 * SACD_SECTOR_SIZE:(i2 + 1) * SACD_SECTOR_SIZE]
+                if s2[:8] == b'SACDTRL2':
+                    off2 = 0x08
+                    while off2 + 4 <= len(s2):
+                        if (s2[off2] == 0 and s2[off2+1] == 0
+                                and s2[off2+2] == 0 and n_tc):
+                            break
+                        n_tc += 1
+                        off2 += 4
+                    break
+
+            if n_tc and len(lsn_list) == n_tc:
+                # 끝 표시 없음 — 마지막 트랙 크기는 Area 끝 주소로 계산
+                for i in range(len(lsn_list)):
+                    lsn_s = lsn_list[i]
+                    if i + 1 < len(lsn_list):
+                        size = lsn_list[i + 1] - lsn_s
+                    elif area_end > lsn_s:
+                        size = area_end - lsn_s
+                    elif len(lsn_list) >= 2:
+                        size = lsn_list[-1] - lsn_list[-2]   # 근사: 직전 트랙 크기
+                    else:
+                        size = 0
+                    if size > 0 and lsn_s < total_sectors:
+                        raw_tracks.append({'lsn': lsn_s, 'size': size})
+            else:
+                # 기존 동작: 마지막 값은 end marker
+                for i in range(len(lsn_list) - 1):
+                    lsn_s = lsn_list[i]
+                    lsn_e = lsn_list[i + 1]
+                    size  = lsn_e - lsn_s
+                    if size > 0 and lsn_s < total_sectors:
+                        raw_tracks.append({'lsn': lsn_s, 'size': size})
         else:
             # fallback: TWOCHTOC 0x40 스캔 (구버전 ISO 호환)
             off = 0x40
@@ -560,9 +598,11 @@ class SACDDecoder:
                     return []
 
                 # 2채널 영역 우선, 없으면 멀티채널
-                area = _parse_area_toc(f, mtoc['twoch_lsn'])
+                area = _parse_area_toc(f, mtoc['twoch_lsn'],
+                                        area_end=mtoc.get('twoch_end', 0))
                 if not area:
-                    area = _parse_area_toc(f, mtoc['mulch_lsn'])
+                    area = _parse_area_toc(f, mtoc['mulch_lsn'],
+                                           area_end=mtoc.get('mulch_end', 0))
                 if not area:
                     return []
 
@@ -570,6 +610,19 @@ class SACDDecoder:
                 titles = _extract_track_titles(f, mtoc.get('master_lsn', SACD_LSN_MASTER), tc,
                                                area.get('area_lsn', 0),
                                                area.get('area_size', 0))
+
+                # ── 곡명 보조 파일: "<ISO명>.txt"가 같은 폴더에 있으면 우선 적용 ──
+                # (디스크에 곡명이 수록되지 않은 ISO용 — 한 줄 = 한 곡, # 줄은 주석)
+                try:
+                    side = Path(filepath).with_suffix('.txt')
+                    if side.exists():
+                        lines = [ln.strip() for ln in
+                                 side.read_text(encoding='utf-8-sig').splitlines()
+                                 if ln.strip() and not ln.lstrip().startswith('#')]
+                        for si in range(min(len(lines), len(titles))):
+                            titles[si] = lines[si]
+                except Exception:
+                    pass
 
                 # DST 압축 Area: 섹터 수로 시간 계산 불가 → SACDTRL2 타임코드 사용
                 is_dst = area.get('frame_format') == FRAME_FORMAT_DST
@@ -589,6 +642,12 @@ class SACDDecoder:
                     # DST: TRL2 타임코드 (연속 시작 시각 차 = 트랙 길이)
                     if is_dst and i + 1 < len(trl2_times):
                         duration = max(0.0, trl2_times[i+1] - trl2_times[i])
+                    elif is_dst and len(trl2_times) >= 2 and i == len(trl2_times) - 1:
+                        # 마지막 트랙(끝 타임코드 없음): 평균 압축률로 추정
+                        span_sec = trl2_times[-1] - trl2_times[0]
+                        span_lsn = t['lsn'] - area['tracks'][0]['lsn']
+                        if span_sec > 0 and span_lsn > 0:
+                            duration = t['size'] * span_sec / span_lsn
 
                     tracks.append({
                         'index':       i,
