@@ -30,7 +30,7 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 APP_NAME="Nikon Chinge HiFi Player"
 BUNDLE_ID="com.twsemicon.hifi-player"
-VERSION="3.1.4"
+VERSION="3.1.5"
 ICON="icon.icns"
 
 # ── Python 환경 확인 및 통일 ─────────────────────────────────────

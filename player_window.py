@@ -1606,6 +1606,13 @@ class HiFiPlayer(QMainWindow):
         self.lbl_album.setText(album)
 
         # 앨범아트 → 있으면 lbl_cover 표시, 없으면 CD 애니메이션
+        if not info.get('cover_data'):
+            fp = info.get('filepath', '') or ''
+            if fp:
+                try:
+                    info['cover_data'] = AudioEngine._folder_cover(fp)
+                except Exception:
+                    pass
         cover_data = info.get('cover_data', None)
         if cover_data:
             px = QPixmap()

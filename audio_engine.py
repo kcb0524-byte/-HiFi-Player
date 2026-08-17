@@ -1272,7 +1272,63 @@ class AudioEngine:
                             return bytes(covers[0])
         except Exception as e:
             print(f'[Cover] {e}')
-        return None
+        # 태그에 아트가 없으면 같은 폴더의 이미지 파일로 폴백
+        return AudioEngine._folder_cover(filepath)
+
+
+    @staticmethod
+    def _folder_cover(filepath: str) -> bytes:
+        """트랙 폴더(및 covers/scans/artwork 하위 폴더)의 이미지 파일을 앨범 아트로 사용.
+        우선순위: front > cover > folder > albumart > album > 기타(큰 파일 우선)"""
+        try:
+            from pathlib import Path
+            folder = Path(filepath).parent
+            exts = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
+            dirs = [folder]
+            try:
+                for d in sorted(folder.iterdir()):
+                    if d.is_dir() and any(k in d.name.lower()
+                                          for k in ('cover', 'scan', 'art')):
+                        dirs.append(d)
+                        if len(dirs) >= 4:
+                            break
+            except Exception:
+                pass
+            cands = []
+            for d in dirs:
+                try:
+                    for q in d.iterdir():
+                        if q.name.startswith('._'):
+                            continue   # macOS AppleDouble 메타 파일 제외
+                        if q.is_file() and q.suffix.lower() in exts:
+                            cands.append(q)
+                except Exception:
+                    pass
+            if not cands:
+                return None
+
+            def score(q):
+                n = q.stem.lower()
+                pri = 0
+                for rank, k in enumerate(('front', 'cover', 'folder',
+                                          'albumart', 'album')):
+                    if k in n:
+                        pri = 100 - rank
+                        break
+                try:
+                    sz = q.stat().st_size
+                except Exception:
+                    sz = 0
+                return (pri, sz)
+
+            cands.sort(key=score, reverse=True)
+            best = cands[0]
+            sz = best.stat().st_size
+            if sz < 5000 or sz > 20 * 1024 * 1024:   # 아이콘/비정상 크기 제외
+                return None
+            return best.read_bytes()
+        except Exception:
+            return None
 
     @staticmethod
     def _calc_rg_gain(data: np.ndarray, target_lufs: float = -18.0) -> float:
