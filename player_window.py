@@ -266,7 +266,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.8")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.9")
         self.setMinimumSize(920, 940)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -1770,6 +1770,14 @@ class HiFiPlayer(QMainWindow):
         self.lbl_album.setText(album)
 
         # 앨범아트 → 있으면 lbl_cover 표시, 없으면 CD 애니메이션
+        # 태그에 아트가 없으면 트랙 폴더의 이미지 파일에서 폴백 (ISO·DSD 포함)
+        if not info.get('cover_data'):
+            fp = info.get('filepath', '') or ''
+            if fp:
+                try:
+                    info['cover_data'] = AudioEngine._folder_cover(fp)
+                except Exception:
+                    pass
         cover_data = info.get('cover_data', None)
         if cover_data:
             px = QPixmap()
@@ -1964,7 +1972,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.8")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.9")
 
         except Exception:
             pass
