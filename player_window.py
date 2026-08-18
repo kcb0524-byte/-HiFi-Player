@@ -1072,7 +1072,8 @@ class HiFiPlayer(QMainWindow):
             f"오디오 파일 ({exts});;모든 파일 (*.*)"
         )
         if paths:
-            self._add_file_list(paths)
+            # 대화상자 다중 선택 순서는 클릭 순서 — 파일명 자연 정렬로 통일
+            self._add_file_list(sorted(paths, key=natural_sort_key))
 
     def _open_sacd_iso(self):
         """SACD ISO 파일 열기 — 트랙 목록 다이얼로그 표시"""
@@ -1203,8 +1204,9 @@ class HiFiPlayer(QMainWindow):
         if dirpath:
             files = []
             for root, dirs, filenames in os.walk(dirpath):
-                dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
-                for fname in sorted(filenames):
+                dirs[:] = sorted((d for d in dirs if not d.startswith('.')),
+                                 key=natural_sort_key)
+                for fname in sorted(filenames, key=natural_sort_key):
                     if fname.startswith('.') or fname.startswith('._'):
                         continue
                     if Path(fname).suffix.lower() in AudioEngine.SUPPORTED_FORMATS:
@@ -1308,6 +1310,8 @@ class HiFiPlayer(QMainWindow):
             self.mini_title.setText("—")
         if hasattr(self, 'mini_artist'):
             self.mini_artist.setText(" ")
+        # 음원 분석 표시 초기화
+        self._reset_authenticity()
         if hasattr(self, 'mini_seek'):
             self.mini_seek.setValue(0)
 
@@ -1361,6 +1365,7 @@ class HiFiPlayer(QMainWindow):
         if self.current_index == row:
             self.engine.stop()
             self.current_index = -1
+            self._reset_now_playing()   # 재생 중이던 곡 삭제 → 앨범아트 등 정보 초기화
         elif self.current_index > row:
             self.current_index -= 1
         self.drop_hint.setVisible(self.playlist.count() == 0)
@@ -1601,6 +1606,20 @@ class HiFiPlayer(QMainWindow):
         self._update_repeat_style()
 
     def _prev_track(self):
+        # 표준 동작(CD/Spotify와 동일): 3초 넘게 재생됐으면 현재 곡 처음으로,
+        # 3초 이내면 이전 곡으로 (곡 중간에 두 번 누르면 이전 곡)
+        if (self.current_index >= 0 and
+                (self.engine.is_playing or self.engine.is_paused) and
+                self.engine.current_position > 3.0):
+            if getattr(self, '_is_sacd_playing', False):
+                self._load_and_play(self.current_index)
+            else:
+                self.engine.seek(0.0)
+                self.seek_slider.setValue(0)
+                self.lbl_pos.setText("0:00")
+                if hasattr(self, 'mini_seek'):
+                    self.mini_seek.setValue(0)
+            return
         prv = self.current_index - 1
         while prv >= 0 and self._is_separator(prv):
             prv -= 1
@@ -1705,26 +1724,6 @@ class HiFiPlayer(QMainWindow):
         # 미니 슬라이더 동기화
         if self._is_mini and not self._seeking:
             self.mini_seek.setValue(self.seek_slider.value())
-
-    def eventFilter(self, obj, event):
-        """SACD ISO 재생 중 seek 슬라이더 클릭 시 안내 메시지 표시"""
-        from PyQt5.QtCore import QEvent
-        from PyQt5.QtWidgets import QToolTip
-        seek_widgets = [self.seek_slider]
-        if hasattr(self, 'mini_seek'):
-            seek_widgets.append(self.mini_seek)
-        if (obj in seek_widgets and
-                getattr(self, '_is_sacd_playing', False) and
-                event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick)):
-            QToolTip.showText(
-                obj.mapToGlobal(event.pos()),
-                "SACD ISO는 탐색(seek)을 지원하지 않습니다",
-                obj,
-                obj.rect(),
-                3000   # 3초간 표시
-            )
-            return True   # 이벤트 소비 (슬라이더 이동 차단)
-        return super().eventFilter(obj, event)
 
     def _on_seek_pressed(self):
         self._seeking = True
@@ -1981,7 +1980,35 @@ class HiFiPlayer(QMainWindow):
     # 키보드 단축키
     # ─────────────────────────────────────────────
     def eventFilter(self, obj, event):
-        """QApplication 글로벌 이벤트 필터 — 포커스 위치 무관하게 키보드 단축키 처리"""
+        """글로벌 이벤트 필터 — 키보드 단축키 + 시크 슬라이더 특수 처리"""
+        # ── 시크 슬라이더 전용: SACD 안내 + 마우스 휠 시크 ─────────
+        seek_widgets = [self.seek_slider]
+        if hasattr(self, 'mini_seek'):
+            seek_widgets.append(self.mini_seek)
+        if obj in seek_widgets:
+            if (getattr(self, '_is_sacd_playing', False) and
+                    event.type() in (QEvent.MouseButtonPress,
+                                     QEvent.MouseButtonDblClick, QEvent.Wheel)):
+                from PyQt5.QtWidgets import QToolTip
+                QToolTip.showText(
+                    obj.mapToGlobal(obj.rect().center()),
+                    "SACD ISO는 탐색(seek)을 지원하지 않습니다",
+                    obj, obj.rect(), 3000)
+                return True   # 이벤트 소비 (슬라이더 이동 차단)
+            if event.type() == QEvent.Wheel:
+                # 휠 시크: 노치당 ±5초
+                dur = self.engine.duration
+                steps = event.angleDelta().y() / 120.0
+                if dur > 0 and steps != 0 and not getattr(self, '_seeking', False):
+                    new_pos = min(max(self.engine.current_position + steps * 5.0, 0.0),
+                                  max(dur - 0.5, 0.0))
+                    self.engine.seek(new_pos)
+                    val = int(new_pos / dur * 1000)
+                    self.seek_slider.setValue(val)
+                    if hasattr(self, 'mini_seek'):
+                        self.mini_seek.setValue(val)
+                return True   # 기본 휠(값만 변경, 시크 안 됨) 차단
+
         if event.type() == QEvent.KeyPress:
             key = event.key()
             # 텍스트 입력 위젯(QLineEdit 등)에서는 가로채지 않음
@@ -2153,6 +2180,7 @@ class HiFiPlayer(QMainWindow):
         self.toggle_rg.setEnabled(not on)
         self.btn_rg_track.setEnabled(not on)
         self.btn_rg_album.setEnabled(not on)
+        self.slider_rg_target.setEnabled(not on)   # RG 타겟(LUFS) 슬라이더도 잠금
         self.toggle_dither.setEnabled(not on)
         self.toggle_spatial.setEnabled(not on)
         self.combo_upsample.setEnabled(not on)
@@ -2277,13 +2305,8 @@ class HiFiPlayer(QMainWindow):
             self.combo_spatial.setCurrentIndex(sp_idx)
             self.engine.set_spatial_mode(self._SPATIAL_MODES.get(sp_idx, 'strong'))
             if bp_on:
-                self.eq_panel.setEnabled(False)
-                self.toggle_rg.setEnabled(False)
-                self.btn_rg_track.setEnabled(False)
-                self.btn_rg_album.setEnabled(False)
-                self.toggle_dither.setEnabled(False)
-                self.toggle_spatial.setEnabled(False)
-                self.combo_upsample.setEnabled(False)
+                # 잠금 목록 중복 구현 금지 — 토글 핸들러로 일원화
+                self._on_bit_perfect_toggled(True)
             # 출력 장치 복원
             saved_dev_name = data.get('output_device_name', '')
             if saved_dev_name:
