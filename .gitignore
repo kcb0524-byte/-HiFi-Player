@@ -1,22 +1,13 @@
-__pycache__/
-*.py[cod]
-*.spec
-build/
-dist/
-*.dmg
-*.exe
-*.pkg
-
-# 분석용 임시 스크립트
-analyze_*.py
-dump_sector*.py
-find_sacd_isos.py
-debug_sacd.py
-
-# 백업 파일
-*.bak
-
-# macOS
+# macOS/빌드 중복 실행이 만드는 복제본
+* 2.*
+* 2/
+._*
 .DS_Store
-*.iconset/
-icon_*.png
+__pycache__/
+*.pyc
+# 테스트용 음원 (소스 아님)
+*.mp3
+*.wav
+*.flac
+*.dsf
+*.iso
