@@ -667,11 +667,13 @@ class HiFiPlayer(QMainWindow):
         self.combo_spatial = QComboBox()
         self.combo_spatial.addItems(["Natural — 은은함 (헤드폰)", "Strong — 뚜렷함 (헤드폰)",
                                      "Wide — 넓은 무대 (헤드폰)", "3D Surround — 360° 입체 (헤드폰)",
-                                     "Speaker 3D — 스피커 전용 (XTC)"])
+                                     "Speaker Wide — 스피커 전용 (무대·홀)"])
         self.combo_spatial.setToolTip(
-            "헤드폰 모드 4종은 헤드폰/이어폰 전용, Speaker 3D는 스피커 전용입니다.\n"
-            "Speaker 3D: 두 스피커와 정삼각형이 되는 위치(스위트 스팟)에서 들어야\n"
-            "크로스토크 제거 효과가 제대로 나타납니다.")
+            "Natural/Strong/Wide/3D는 헤드폰·이어폰 전용,\n"
+            "Speaker Wide는 스피커 전용입니다.\n"
+            "Speaker Wide: 저역 무대 폭 복원(셔플러) + 스테레오 확장 +\n"
+            "홀 앰비언스로 스피커에서도 넓고 감싸이는 공간감을 만듭니다.\n"
+            "청취 위치에 관대하지만, 두 스피커 사이 중앙이 가장 좋습니다.")
         self.combo_spatial.setCurrentIndex(1)
         self.combo_spatial.currentIndexChanged.connect(self._on_spatial_mode_changed)
         sp_row.addWidget(sp_lbl)
