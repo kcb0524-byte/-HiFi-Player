@@ -473,7 +473,7 @@ class AudioEngine:
         self._bit_perfect: bool = False      # True: EQ/RG/볼륨 완전 bypass, 원본 그대로 DAC로
         self._dither_enabled: bool = True    # TPDF 디더링 (float64→float32 변환 시)
         self._spatial_enabled: bool = False  # 공간 음향 (크로스피드 바이노럴, 스테레오 전용)
-        self._spatial_mode: str = 'strong'   # 'natural' | 'strong' | 'wide'
+        self._spatial_mode: str = 'strong'   # 'natural'|'strong'|'wide'|'3d'|'speaker'
         self._fixed_output_sr: int = 0       # 0=파일 SR 그대로, >0=강제 업샘플링 SR
         self._upsample_quality: int = 32     # resample_poly window 품질 (높을수록 정밀)
 
@@ -1990,7 +1990,7 @@ class AudioEngine:
 
     def set_spatial_mode(self, mode: str):
         """공간 음향 강도: 'natural'(은은) | 'strong'(뚜렷) | 'wide'(넓은 무대)"""
-        if mode in ('natural', 'strong', 'wide', '3d'):
+        if mode in ('natural', 'strong', 'wide', '3d', 'speaker'):
             self._spatial_mode = mode
             print(f"[HiFi] 공간 음향 모드: {mode}")
 

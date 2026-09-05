@@ -657,7 +657,7 @@ class HiFiPlayer(QMainWindow):
 
         self.toggle_spatial = ToggleSwitch(checked=False)
         self.toggle_spatial.toggled.connect(self._on_spatial_toggled)
-        lay.addLayout(_opt_row("Spatial Audio", "공간 음향 (헤드폰 권장)", self.toggle_spatial))
+        lay.addLayout(_opt_row("Spatial Audio", "공간 음향 (모드별 헤드폰/스피커)", self.toggle_spatial))
         lay.addSpacing(2)
 
         sp_row = QHBoxLayout()
@@ -665,8 +665,13 @@ class HiFiPlayer(QMainWindow):
         sp_lbl = QLabel("Spatial Mode")
         sp_lbl.setStyleSheet(f"color:{DARK['text_dim']}; font-size:13px;")
         self.combo_spatial = QComboBox()
-        self.combo_spatial.addItems(["Natural — 은은함", "Strong — 뚜렷함", "Wide — 넓은 무대",
-                                     "3D Surround — 360° 입체 (HRTF)"])
+        self.combo_spatial.addItems(["Natural — 은은함 (헤드폰)", "Strong — 뚜렷함 (헤드폰)",
+                                     "Wide — 넓은 무대 (헤드폰)", "3D Surround — 360° 입체 (헤드폰)",
+                                     "Speaker 3D — 스피커 전용 (XTC)"])
+        self.combo_spatial.setToolTip(
+            "헤드폰 모드 4종은 헤드폰/이어폰 전용, Speaker 3D는 스피커 전용입니다.\n"
+            "Speaker 3D: 두 스피커와 정삼각형이 되는 위치(스위트 스팟)에서 들어야\n"
+            "크로스토크 제거 효과가 제대로 나타납니다.")
         self.combo_spatial.setCurrentIndex(1)
         self.combo_spatial.currentIndexChanged.connect(self._on_spatial_mode_changed)
         sp_row.addWidget(sp_lbl)
@@ -2145,7 +2150,7 @@ class HiFiPlayer(QMainWindow):
     def _on_spatial_toggled(self, on: bool):
         self.engine.set_spatial_enabled(on)
 
-    _SPATIAL_MODES = {0: 'natural', 1: 'strong', 2: 'wide', 3: '3d'}
+    _SPATIAL_MODES = {0: 'natural', 1: 'strong', 2: 'wide', 3: '3d', 4: 'speaker'}
 
     def _on_spatial_mode_changed(self, idx: int):
         self.engine.set_spatial_mode(self._SPATIAL_MODES.get(idx, 'strong'))
