@@ -833,6 +833,14 @@ class AudioEngine:
             stderr=subprocess.PIPE,
             **_sp_kwargs)
 
+        # 부분 성공 허용: 손상 파일도 1초 이상 디코딩됐으면 그만큼은 재생
+        _min_bytes = srate * channels * 8   # f64le 1초 분량
+        if proc.returncode != 0 and proc.stdout and len(proc.stdout) >= _min_bytes:
+            print(f"[Audio] 부분 디코딩(파일 후반 손상 가능): {filepath}")
+            raw = np.frombuffer(proc.stdout, dtype=np.float64)
+            raw = raw[: (len(raw) // channels) * channels]
+            return raw.reshape(-1, channels), srate
+
         if proc.returncode != 0 or not proc.stdout:
             # 2단계: tmpfile 방식 (-ar/-ac 없이 원본 포맷 그대로)
             _d, _sr = _run_tmpfile()
@@ -840,15 +848,33 @@ class AudioEngine:
                 print(f"[Audio] tmpfile 방식으로 디코딩 성공: {filepath}")
                 return _d, _sr
 
+            _low = filepath.lower()
             # 3단계: 구형 MP3 전용 — -f mp3 강제 지정
-            if filepath.lower().endswith('.mp3'):
+            if _low.endswith('.mp3'):
                 _d, _sr = _run_tmpfile(force_fmt='mp3')
                 if _d is not None:
                     print(f"[Audio] -f mp3 강제 지정으로 디코딩 성공: {filepath}")
                     return _d, _sr
+            # 3단계: WMA 전용 — -f asf 강제 지정 (확장자와 컨테이너 불일치 대응)
+            if _low.endswith(('.wma', '.asf', '.wmv')):
+                _d, _sr = _run_tmpfile(force_fmt='asf')
+                if _d is not None:
+                    print(f"[Audio] -f asf 강제 지정으로 디코딩 성공: {filepath}")
+                    return _d, _sr
 
-            err = proc.stderr.decode(errors='replace')[:300]
-            raise RuntimeError(f"ffmpeg 디코딩 실패: {err}")
+            err = proc.stderr.decode(errors='replace')
+            _el = err.lower()
+            # DRM 보호 파일 명확 안내 (옛 음원 사이트 구매 WMA에 흔함)
+            if ('drm' in _el or 'encrypt' in _el or 'digital rights' in _el
+                    or ('asf' in _el and 'invalid data' in _el
+                        and _low.endswith('.wma'))):
+                raise RuntimeError(
+                    "DRM(복사 방지)으로 보호된 WMA 파일로 보입니다.\n"
+                    "옛 음원 사이트에서 구매한 WMA에 흔하며, 어떤 프로그램으로도 "
+                    "라이선스 없이는 재생할 수 없습니다.\n"
+                    "해결: 구매처에서 MP3/FLAC로 재다운로드하거나, "
+                    "라이선스가 있는 PC의 Windows Media Player로 CD에 구운 뒤 다시 리핑하세요.")
+            raise RuntimeError(f"ffmpeg 디코딩 실패: {err[:300]}")
 
         raw = np.frombuffer(proc.stdout, dtype=np.float64)
         if len(raw) == 0:
