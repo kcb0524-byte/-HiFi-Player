@@ -290,12 +290,21 @@ _MODE_PARAMS = {
     'natural': dict(fc=700.0, feed_db=-4.5,  refl=0.0,  side=1.0),   # 순수 크로스피드 (자연스러움 지향)
     'strong':  dict(fc=700.0, feed_db=-8.0,  refl=1.2,  side=1.22),  # 반사음 + 확장 (기본) — v1.8.11 강화
     'wide':    dict(fc=700.0, feed_db=-10.0, refl=1.75, side=1.55),  # 반사음·확장 대폭 — v1.8.11 강화
+    # speaker: 크로스피드 없음(스피커에선 무대를 좁힘) — 셔플러+확장+반사음.
+    # XTC(v1.8.11)는 실제 거실에서 콤 착색('앵앵거림')만 남아 v1.8.12에서 교체.
+    'speaker': dict(fc=700.0, feed_db=-60.0, refl=1.0, side=1.38),
 }
 
 # 초기 반사음 탭: (지연 ms, 게인) — 소수(prime-ish) 간격으로 콤 필터링 최소화
 _TAPS_SAME  = [(11.7, 0.13), (19.3, 0.09), (31.7, 0.055)]           # 같은 쪽 귀
 _TAPS_CROSS = [(8.1, 0.15), (15.9, 0.105), (26.3, 0.065), (38.9, 0.042)]  # 반대쪽 귀
 _R_DELAY_RATIO = 1.073   # 우채널 반사 지연을 살짝 다르게 → 좌우 비상관(자연스러움)
+
+# Speaker 모드 전용 앰비언스 탭 (후기 반사 ~120ms) — '홀에 감싸이는' 공간감.
+# 방이 이미 주는 초기 반사와 달리, 좌우 비상관 잔향 꼬리는 스피커 재생에서도
+# 공간 인상을 뚜렷하게 만든다 (AV 리시버 DSP 공간 모드와 같은 계열)
+_TAPS_AMB_SAME  = [(47.9, 0.068), (67.1, 0.056), (89.7, 0.044), (109.3, 0.034)]
+_TAPS_AMB_CROSS = [(43.3, 0.072), (57.9, 0.064), (76.1, 0.052), (98.9, 0.042), (119.7, 0.032)]
 _REFL_LP_HZ = 4500.0     # 반사음 고역 흡수 (벽면 흡음 재현)
 
 
@@ -315,37 +324,16 @@ class SpatialProcessor:
 
         # ── 3D Surround (HRTF) 모드: 별도 렌더러에 위임 ──
         self._hrtf = None
-        self._xtc = (mode == 'speaker')
         if mode == '3d':
             self._hrtf = _Hrtf3D(self.sample_rate)
             return
 
-        # ── Speaker 3D (XTC) 모드: 크로스토크 캔슬레이션 (RACE 계열) ──
-        # 헤드폰용 모드들과 반대 원리 — 스피커 청취 시 반대쪽 귀로 넘어가는
-        # 음향 크로스토크를 재귀 상쇄 신호로 지워 좌우 귀를 분리한다.
-        # 스위트 스팟(두 스피커와 정삼각형 위치) 청취 필수.
-        if self._xtc:
-            # ±30° 표준 배치의 양귀 도달 시간차 (Woodworth 근사 ≈ 261µs)
-            self._xd = max(2, int(round(self.sample_rate * 261e-6)))
-            self._xg = 0.78          # 반대쪽 귀 도달 감쇠(머리 그림자) 근사
-            nyq = self.sample_rate * 0.5
-            # 처리 대역 200Hz~7kHz — 저역은 방향성 없고 초고역은 XTC 불안정.
-            # 선형 위상 FIR로 분리해야 '원음 − 대역' 보완 신호가 깨끗하게 남는다
-            # (IIR은 위상 지연 때문에 대역 내 성분이 우회 경로로 새어 상쇄 효율 급락)
-            from scipy.signal import firwin
-            self._xtaps = 257
-            self._xfir = firwin(self._xtaps,
-                                [min(200.0, nyq * 0.4), min(7000.0, nyq * 0.8)],
-                                pass_zero=False, fs=self.sample_rate)
-            self._xD = self._xtaps // 2   # FIR 그룹 지연 (원음 경로도 동일 지연)
-            self._xside = 1.12       # 사이드 소폭 확장 (XTC 효과 보강)
-            self._norm = 1.0
-            self.reset()
-            self._norm = self._calibrate_xtc()
-            self.reset()
-            return
-
         p = _MODE_PARAMS[mode]
+
+        # ── Speaker 모드: 블럼라인 셔플러 (저역 사이드 확장) ──
+        # 스테레오는 저역일수록 좌우 상관이 높아 무대가 좁게 들린다.
+        # 600Hz 이하 사이드 성분을 +4.6dB 보강해 저역 무대 폭을 복원 (모노 성분 불변)
+        self._shuffle = (mode == 'speaker')
 
         # ── 크로스피드 게인: k = r/(1+r) → 모노 성분 전달함수 1.0 보장 ──
         r = 10.0 ** (p['feed_db'] / 20.0)
@@ -358,15 +346,21 @@ class SpatialProcessor:
                               btype='low', output='sos')
         self._sos_refl = butter(1, min(_REFL_LP_HZ, nyq * 0.9) / nyq,
                                 btype='low', output='sos')
+        self._sos_shuf = butter(2, min(600.0, nyq * 0.4) / nyq,
+                                btype='low', output='sos') if self._shuffle else None
 
         # ── 반사음 탭 (샘플 단위, 좌/우 비대칭) ──
         def _mk(taps, ratio):
             return [(max(1, int(round(self.sample_rate * ms * 1e-3 * ratio))), g)
                     for ms, g in taps]
-        self._taps_same_l  = _mk(_TAPS_SAME, 1.0)
-        self._taps_same_r  = _mk(_TAPS_SAME, _R_DELAY_RATIO)
-        self._taps_cross_l = _mk(_TAPS_CROSS, 1.0)
-        self._taps_cross_r = _mk(_TAPS_CROSS, _R_DELAY_RATIO)
+        t_same, t_cross = _TAPS_SAME, _TAPS_CROSS
+        if self._shuffle:   # speaker: 초기 반사 + 앰비언스 꼬리
+            t_same  = _TAPS_SAME + _TAPS_AMB_SAME
+            t_cross = _TAPS_CROSS + _TAPS_AMB_CROSS
+        self._taps_same_l  = _mk(t_same, 1.0)
+        self._taps_same_r  = _mk(t_same, _R_DELAY_RATIO)
+        self._taps_cross_l = _mk(t_cross, 1.0)
+        self._taps_cross_r = _mk(t_cross, _R_DELAY_RATIO)
 
         max_d = max(d for d, _ in
                     self._taps_same_l + self._taps_same_r
@@ -379,7 +373,9 @@ class SpatialProcessor:
         # 더 크거나 같게 들리는 것이 자연스럽고, "켜면 작아진다" 인상을 없앤다.
         # 사이드 확장분만 최소한으로 보정 (클리핑 여유 확보).
         # v1.8.11: 강화된 반사음·확장분까지 반영해 ON/OFF 등청감 유지
-        self._norm = 1.0 / (1.0 + 0.18 * (self._side - 1.0) + 0.04 * self._refl)
+        # (speaker는 셔플러 저역 사이드 보강 + 앰비언스 탭 몫을 추가 보정)
+        extra = 0.04 if self._shuffle else 0.0
+        self._norm = 1.0 / (1.0 + 0.18 * (self._side - 1.0) + 0.04 * self._refl + extra)
 
         self.reset()
 
@@ -387,15 +383,6 @@ class SpatialProcessor:
         """필터 상태·지연 버퍼 초기화"""
         if self._hrtf is not None:
             self._hrtf.reset()
-            return
-        if self._xtc:
-            h = self._xtaps - 1
-            self._xf_l = np.zeros(h, dtype=np.float64)   # FIR 입력 히스토리
-            self._xf_r = np.zeros(h, dtype=np.float64)
-            self._xd_l = np.zeros(self._xD, dtype=np.float64)  # 원음 지연선
-            self._xd_r = np.zeros(self._xD, dtype=np.float64)
-            self._xh_l = np.zeros(self._xd, dtype=np.float64)  # 재귀 출력 히스토리
-            self._xh_r = np.zeros(self._xd, dtype=np.float64)
             return
         n1 = self._sos_xf.shape[0]
         n2 = self._sos_refl.shape[0]
@@ -405,6 +392,8 @@ class SpatialProcessor:
         self._zi_refl_r = np.zeros((n2, 2), dtype=np.float64)
         self._hist_l = np.zeros(self._hist_len, dtype=np.float64)
         self._hist_r = np.zeros(self._hist_len, dtype=np.float64)
+        if self._shuffle:
+            self._zi_shuf = np.zeros((self._sos_shuf.shape[0], 2), dtype=np.float64)
 
     def process(self, chunk: np.ndarray) -> np.ndarray:
         """
@@ -417,10 +406,6 @@ class SpatialProcessor:
         # ── 3D Surround (HRTF) 모드 위임 ──
         if self._hrtf is not None:
             return self._hrtf.process(chunk)
-
-        # ── Speaker 3D (XTC) 모드 ──
-        if self._xtc:
-            return self._process_speaker(chunk)
 
         return self._process_stereo_body(chunk)
 
@@ -436,10 +421,14 @@ class SpatialProcessor:
         L = np.ascontiguousarray(chunk[:, 0], dtype=np.float64)
         R = np.ascontiguousarray(chunk[:, 1], dtype=np.float64)
 
-        # ── 1) 스테레오 확장 (wide 전용, M/S) ──
-        if self._side != 1.0:
+        # ── 1) 스테레오 확장 (M/S) + 셔플러(speaker 전용) ──
+        if self._side != 1.0 or self._shuffle:
             M = (L + R) * 0.5
-            S = (L - R) * 0.5 * self._side
+            S = (L - R) * 0.5
+            if self._shuffle:
+                s_lo, self._zi_shuf = sosfilt(self._sos_shuf, S, zi=self._zi_shuf)
+                S = S + 0.45 * s_lo   # 600Hz 이하 사이드 +3.2dB (저역 무대 폭 복원)
+            S = S * self._side
             L, R = M + S, M - S
 
         # ── 2) 크로스피드 (위상 정합형 — 모노 성분 불변) ──
@@ -484,81 +473,3 @@ class SpatialProcessor:
         out[:, 1] = out_r
         return out
 
-    # ─────────────────────────────────────────────────────────
-    # Speaker 3D (XTC) — RACE 계열 재귀 크로스토크 캔슬레이션
-    # ─────────────────────────────────────────────────────────
-    def _process_speaker(self, chunk: np.ndarray) -> np.ndarray:
-        n = len(chunk)
-        L = np.ascontiguousarray(chunk[:, 0], dtype=np.float64)
-        R = np.ascontiguousarray(chunk[:, 1], dtype=np.float64)
-
-        # 사이드 소폭 확장
-        M = (L + R) * 0.5
-        S = (L - R) * 0.5 * self._xside
-        L, R = M + S, M - S
-
-        # 대역 분리 (선형 위상 FIR) — band는 x[n−D] 기준으로 정렬되므로
-        # 원음 경로도 D만큼 지연시켜 위상 일치 상태에서 보완 분리
-        h = self._xtaps - 1
-        jl = np.concatenate([self._xf_l, L]); self._xf_l = jl[-h:].copy()
-        jr = np.concatenate([self._xf_r, R]); self._xf_r = jr[-h:].copy()
-        bl = np.convolve(jl, self._xfir, mode='valid')
-        br = np.convolve(jr, self._xfir, mode='valid')
-        D = self._xD
-        tl = np.concatenate([self._xd_l, L])
-        tr = np.concatenate([self._xd_r, R])
-        Ld, self._xd_l = tl[:n], tl[n:].copy()   # len(tl) = D+n → 지연선 항상 D 유지
-        Rd, self._xd_r = tr[:n], tr[n:].copy()
-        res_l = Ld - bl
-        res_r = Rd - br
-
-        # 재귀 크로스토크 상쇄: out[n] = band[n] − g·out_반대[n−d]
-        g, d = self._xg, self._xd
-        out_bl = np.empty(n, dtype=np.float64)
-        out_br = np.empty(n, dtype=np.float64)
-        hl, hr = self._xh_l, self._xh_r
-        i = 0
-        while i < n:
-            m = min(d, n - i)
-            cl = bl[i:i + m] - g * hr[:m]
-            cr = br[i:i + m] - g * hl[:m]
-            out_bl[i:i + m] = cl
-            out_br[i:i + m] = cr
-            if m == d:
-                hl, hr = cl, cr
-            else:
-                hl = np.concatenate([hl[m:], cl])
-                hr = np.concatenate([hr[m:], cr])
-            i += m
-        self._xh_l = np.array(hl, dtype=np.float64, copy=True)
-        self._xh_r = np.array(hr, dtype=np.float64, copy=True)
-
-        out = np.empty_like(chunk, dtype=np.float64)
-        out[:, 0] = (res_l + out_bl) * self._norm
-        out[:, 1] = (res_r + out_br) * self._norm
-        return out
-
-    def _calibrate_xtc(self) -> float:
-        """등청감 캘리브레이션 — 3D 모드와 동일 방식 (500Hz~8kHz 대역 기준)"""
-        rng = np.random.default_rng(1)
-        n = 16384
-
-        def pink(sz):
-            W = np.fft.rfft(rng.standard_normal(sz))
-            f = np.fft.rfftfreq(sz)
-            W[1:] /= np.sqrt(f[1:]); W[0] = 0
-            x = np.fft.irfft(W)
-            return x / np.std(x)
-
-        M = pink(n); S = pink(n) * np.sqrt(0.3 / 0.7)
-        ref = np.stack([M + S, M - S], axis=1) * 0.1
-        out = self.process(ref.copy())
-        nyq = self.sample_rate * 0.5
-        band = butter(2, [min(500.0, nyq * 0.4) / nyq, min(8000.0, nyq * 0.8) / nyq],
-                      btype='band', output='sos')
-        rb = sosfilt(band, ref[4096:, 0])
-        ob = sosfilt(band, out[4096:, 0])
-        in_rms = np.sqrt(np.mean(rb ** 2))
-        out_rms = np.sqrt(np.mean(ob ** 2))
-        trim = 10.0 ** (+0.5 / 20.0)
-        return float(in_rms / max(out_rms, 1e-12) * trim)
