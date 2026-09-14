@@ -23,11 +23,21 @@ jobs:
           pip install pyinstaller pyinstaller-hooks-contrib
           pip install PyQt5 numpy scipy sounddevice mutagen soundfile miniaudio
 
-      - name: ffmpeg 설치 및 복사 (APE 재생용)
+      - name: ffmpeg 설치 및 복사 (APE·WMA 재생용)
         run: |
           choco install ffmpeg -y
-          copy "C:\ProgramData\chocolatey\bin\ffmpeg.exe" "ffmpeg.exe"
-        shell: cmd
+          # 주의: C:\ProgramData\chocolatey\bin\ffmpeg.exe 는 Chocolatey 'shim'(경로 리다이렉트
+          # 껍데기)이라 다른 PC에 복사하면 동작하지 않는다 → lib 폴더의 실제 실행파일을 번들.
+          $lib = "C:\ProgramData\chocolatey\lib\ffmpeg"
+          $ff = Get-ChildItem $lib -Recurse -Filter ffmpeg.exe  | Sort-Object Length -Descending | Select-Object -First 1
+          $fp = Get-ChildItem $lib -Recurse -Filter ffprobe.exe | Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $ff -or $ff.Length -lt 20MB) { Write-Error "실제 ffmpeg.exe를 찾지 못함 (shim만 존재)"; exit 1 }
+          if (-not $fp -or $fp.Length -lt 20MB) { Write-Error "실제 ffprobe.exe를 찾지 못함"; exit 1 }
+          Copy-Item $ff.FullName ffmpeg.exe
+          Copy-Item $fp.FullName ffprobe.exe
+          Write-Host ("ffmpeg : {0} ({1} MB)" -f $ff.FullName, [math]::Round($ff.Length/1MB))
+          Write-Host ("ffprobe: {0} ({1} MB)" -f $fp.FullName, [math]::Round($fp.Length/1MB))
+        shell: pwsh
 
       - name: MinGW(GCC) 경로 설정
         run: |
@@ -61,6 +71,7 @@ jobs:
             --add-data "sacd_ffmpeg.py;." `
             --add-data "upnp_browser.py;." `
             --add-data "ffmpeg.exe;." `
+            --add-data "ffprobe.exe;." `
             --add-binary "libdst.dll;." `
             --hidden-import PyQt5 `
             --hidden-import PyQt5.QtCore `
@@ -110,9 +121,14 @@ jobs:
             "libsndfile"         = "libsndfile*"
             "portaudio"          = "*portaudio*"
             "ffmpeg.exe"         = "ffmpeg.exe"
+            "ffprobe.exe"        = "ffprobe.exe"
             "libdst.dll"         = "libdst.dll"
           }
           $fail = $false
+          # ffmpeg.exe가 Chocolatey shim(수백 KB)이면 배포 후 WMA/APE 재생 실패 → 크기로 차단
+          $ffm = Get-ChildItem -Path $root -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($ffm -and $ffm.Length -lt 20MB) { Write-Host ("❌ ffmpeg.exe가 shim입니다 ({0} bytes)" -f $ffm.Length); $fail = $true }
+          elseif ($ffm) { Write-Host ("✅ ffmpeg.exe 실제 바이너리 ({0} MB)" -f [math]::Round($ffm.Length/1MB)) }
           foreach ($k in $checks.Keys) {
             $hit = Get-ChildItem -Path $root -Recurse -Filter $checks[$k] -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($hit) { Write-Host "OK       $k -> $($hit.FullName)" }
@@ -129,12 +145,12 @@ jobs:
           #pragma encoding "utf-8"
           [Setup]
           AppName=Nikon Chinge HiFi Player
-          AppVersion=3.1.6
+          AppVersion=3.1.7
           AppPublisher=Nikon Chinge
           DefaultDirName={autopf}\Nikon Chinge HiFi Player
           DefaultGroupName=Nikon Chinge HiFi Player
           OutputDir=dist
-          OutputBaseFilename=NikonChingeHiFiPlayer_Setup_3.1.6
+          OutputBaseFilename=NikonChingeHiFiPlayer_Setup_3.1.7
           SetupIconFile=icon.ico
           Compression=lzma2
           SolidCompression=yes
@@ -189,7 +205,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/NikonChingeHiFiPlayer_Setup_3.1.6.exe
+          path: dist/NikonChingeHiFiPlayer_Setup_3.1.7.exe
           retention-days: 30
 
   # ── macOS 빌드 (Apple Silicon) ─────────────────────────────────
@@ -327,11 +343,11 @@ jobs:
           hdiutil create -volname "Nikon Chinge HiFi Player" \
             -srcfolder "dist/Nikon Chinge HiFi Player.app" \
             -ov -format UDZO \
-            "dist/NikonChingeHiFiPlayer-3.1.6-arm64.dmg"
+            "dist/NikonChingeHiFiPlayer-3.1.7-arm64.dmg"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-arm64
-          path: dist/NikonChingeHiFiPlayer-3.1.6-arm64.dmg
+          path: dist/NikonChingeHiFiPlayer-3.1.7-arm64.dmg
           retention-days: 30
