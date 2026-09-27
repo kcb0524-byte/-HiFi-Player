@@ -125,21 +125,41 @@ def analyze_stream(sr: int, mono: np.ndarray, *,
         return dict(verdict='분석 불가', level='info',
                     color=LEVEL_COLOR['info'],
                     detail='분석에 필요한 데이터 부족', cutoff_khz=0.0)
+    freqs, lin = spectrum_power(sr, mono)
+    return judge_spectrum(sr, freqs, lin, declared_sr=declared_sr,
+                          is_dsd=is_dsd, dsd_label=dsd_label)
 
+
+def spectrum_power(sr: int, mono: np.ndarray):
+    """구간의 파워 스펙트럼 (freqs, lin) — 여러 구간을 np.maximum으로 누적하면
+    곡 전체의 '최대 보유 스펙트럼'이 되어, 조용한 도입부가 길어도 어딘가에서
+    한 번이라도 나온 고주파 성분을 놓치지 않는다."""
+    n = len(mono)
     if n > FFT_SIZE * 4:
         mid = n // 2
         chunk = mono[mid - FFT_SIZE * 2: mid + FFT_SIZE * 2]
     else:
         chunk = mono
+    # 고정 길이 FFT(누적 호환): 긴 구간은 FFT_SIZE 단위로 잘라 평균
+    L = FFT_SIZE
+    win = np.hanning(L)
+    acc = None; cnt = 0
+    for st in range(0, len(chunk) - L + 1, L):
+        spec = np.abs(np.fft.rfft(chunk[st:st + L] * win)) ** 2
+        acc = spec if acc is None else acc + spec
+        cnt += 1
+    lin = acc / max(cnt, 1)
+    freqs = np.fft.rfftfreq(L, d=1.0 / sr)
+    return freqs, lin
 
-    win = np.hanning(len(chunk))
-    spec = np.abs(np.fft.rfft(chunk * win))
-    freqs = np.fft.rfftfreq(len(chunk), d=1.0 / sr)
 
-    eps = 1e-12
-    pdb = 20.0 * np.log10(np.maximum(spec, eps))
+def judge_spectrum(sr: int, freqs: np.ndarray, lin: np.ndarray, *,
+                   declared_sr: int = 0, is_dsd: bool = False,
+                   dsd_label: str = '') -> dict:
+    """파워 스펙트럼(누적 가능)으로 판정"""
+    eps = 1e-24
+    pdb = 10.0 * np.log10(np.maximum(lin, eps))
     mdb = float(pdb.max())
-    lin = spec ** 2
     nyq = sr / 2.0
 
     if is_dsd:
