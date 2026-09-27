@@ -1982,7 +1982,7 @@ class HiFiPlayer(QMainWindow):
             if track and hasattr(track, 'is_dsd') and track.is_dsd:
                 was_playing = (self.engine._state == 'playing')
                 pos = self.engine.current_position
-                self._start_track(self.current_index)
+                self._load_and_play(self.current_index)
                 if was_playing:
                     self.engine.seek(pos)
 
