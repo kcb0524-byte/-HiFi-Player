@@ -13,6 +13,7 @@ import os
 import json
 import random
 import threading
+import time
 from pathlib import Path
 from typing import Optional, List
 
@@ -31,6 +32,7 @@ from PyQt5.QtCore import (
     QPoint, QEvent,
 )
 from PyQt5.QtGui import (
+    QImage,
     QIcon, QFont, QFontMetrics, QPalette, QColor, QDragEnterEvent, QDropEvent,
     QPixmap, QPainter, QLinearGradient, QBrush, QPen, QPainterPath,
     QRadialGradient, QConicalGradient,
@@ -43,7 +45,7 @@ from upnp_browser import UPnPDialog
 
 
 import authenticity
-from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET
+from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET, APP_VERSION
 from ui_widgets import (
     TrackLoader, MarqueeLabel, CDWidget, EQGraph, PresetPanel, EQPanel,
     ToggleSwitch, TransportButton, IconButton, VUMeter,
@@ -79,6 +81,7 @@ class HiFiPlayer(QMainWindow):
     _vu_signal = pyqtSignal(float, float)
     _freq_signal = pyqtSignal(list)
     _auth_signal = pyqtSignal(dict)
+    _cover_signal = pyqtSignal(object, str)   # (QImage, filepath) — 폴더 아트 백그라운드 결과
 
     SETTINGS_FILE = str(Path.home() / '.hifi_player_settings.json')
 
@@ -94,7 +97,8 @@ class HiFiPlayer(QMainWindow):
         self._auth_busy = False
         self._auth_done = False
         self._auth_runs = 0          # 지금까지 판정한 구간 수
-        self._auth_best = None       # 최고 측정치 (컷오프 최대 구간)
+        self._auth_best = None       # 최근 판정
+        self._auth_pmax = None       # 누적 최대 스펙트럼
         self._loader: Optional[TrackLoader] = None
         self._seeking = False
         self._is_sacd_playing = False
@@ -205,6 +209,34 @@ class HiFiPlayer(QMainWindow):
         self.engine.on_vu_level = vu_cb
         self.engine.on_chunk_ready = chunk_cb
         self._auth_signal.connect(self._on_auth_result)
+        self._cover_signal.connect(self._on_folder_cover)
+
+        # ── UI 정지(무지개 커서) 감시: 메인 스레드가 4초 이상 멈추면
+        #    모든 스레드의 스택을 ~/.hifi_player_ui_stall.log 에 기록 ──
+        self._ui_alive = time.monotonic()
+        self._wd_timer = QTimer(self)
+        self._wd_timer.timeout.connect(self._ui_heartbeat)
+        self._wd_timer.start(500)
+        threading.Thread(target=self._ui_watchdog, daemon=True).start()
+
+    def _ui_heartbeat(self):
+        self._ui_alive = time.monotonic()
+
+    def _ui_watchdog(self):
+        import faulthandler
+        log_path = str(Path.home() / '.hifi_player_ui_stall.log')
+        while True:
+            time.sleep(1.0)
+            if time.monotonic() - self._ui_alive > 4.0:
+                try:
+                    with open(log_path, 'a') as f:
+                        f.write(f"\n===== UI 정지 감지 {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                                f"(버전 {APP_VERSION}) =====\n")
+                        f.flush()
+                        faulthandler.dump_traceback(file=f, all_threads=True)
+                except Exception:
+                    pass
+                time.sleep(30)   # 같은 정지에 대한 중복 기록 방지
 
     def _run_authenticity(self, sr: int, samples):
         """백그라운드 분석 (오디오 콜백 밖에서 FFT 수행)
@@ -218,20 +250,31 @@ class HiFiPlayer(QMainWindow):
             if rms < 1e-4:
                 return
             info = self.current_info or {}
-            res = authenticity.analyze_stream(
-                sr, samples,
+            # 곡 전체에 걸쳐 스펙트럼을 누적(최대값 유지) → 누적 스펙트럼으로 판정.
+            # 조용한 도입부·단조로운 구간이 길어도 어딘가 한 번 나온 고주파를 놓치지 않음
+            freqs, lin = authenticity.spectrum_power(sr, samples)
+            if self._auth_pmax is None or len(self._auth_pmax) != len(lin):
+                self._auth_pmax = lin
+            else:
+                self._auth_pmax = np.maximum(self._auth_pmax, lin)
+            res = authenticity.judge_spectrum(
+                sr, freqs, self._auth_pmax,
                 declared_sr=int(info.get('original_sample_rate', 0)
                                 or getattr(self.engine, '_sample_rate', 0) or 0),
                 is_dsd=bool(getattr(self.engine, '_is_dsd', False)),
                 dsd_label=str(info.get('dsd_rate', '') or 'DSD'),
             )
             self._auth_runs += 1
-            best = self._auth_best
-            if (best is None
-                    or res.get('cutoff_khz', 0.0) > best.get('cutoff_khz', 0.0)):
-                self._auth_best = res
-                self._auth_signal.emit(res)
-            if self._auth_runs >= 6:      # 약 18초 분량이면 충분
+            # 부정 판정(가짜·의심)은 증거가 충분히 쌓일 때까지 보류 —
+            # 고주파가 나올 구간을 아직 못 만났을 뿐일 수 있음 (긍정 판정은 즉시)
+            if res.get('level') in ('bad', 'warn') and self._auth_runs < 8:
+                res = dict(res, verdict='분석 중', level='info',
+                           color=authenticity.LEVEL_COLOR['info'],
+                           detail=f"현재까지 컷오프 {res.get('cutoff_khz', 0):.1f}kHz — "
+                                  f"더 많은 구간을 분석해 판정합니다")
+            self._auth_best = res
+            self._auth_signal.emit(res)
+            if self._auth_runs >= 60:     # 약 3분 분량까지 누적 (이후 판정 고정)
                 self._auth_done = True
         except Exception:
             pass
@@ -246,6 +289,7 @@ class HiFiPlayer(QMainWindow):
         self._auth_busy = False
         self._auth_runs = 0
         self._auth_best = None
+        self._auth_pmax = None
         if hasattr(self, 'lbl_auth'):
             self.lbl_auth.hide()
 
@@ -266,7 +310,7 @@ class HiFiPlayer(QMainWindow):
     # UI 구성
     # ─────────────────────────────────────────────
     def _build_ui(self):
-        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.15")
+        self.setWindowTitle("Nikon Chinge HiFi Music Player - Spatial v1.8.16")
         self.setMinimumSize(920, 940)
         # 화면 높이에 맞게 자동 조정
         from PyQt5.QtWidgets import QDesktopWidget
@@ -1560,9 +1604,13 @@ class HiFiPlayer(QMainWindow):
         self.btn_play.set_icon("loading")
         self.btn_play.setEnabled(False)
 
-        # 백그라운드 로드
+        # 백그라운드 로드 — 로딩 중이면 terminate() 대신 '대기열'로 처리.
+        # (terminate()는 스레드가 잠금을 쥔 채 죽어 메인 스레드가 영원히 멈추던
+        #  '무지개 커서' 원인 — 소리는 나는데 UI만 정지)
         if self._loader and self._loader.isRunning():
-            self._loader.terminate()
+            self._pending_load = index
+            return
+        self._pending_load = None
         sacd_info = getattr(track, '_sacd_track_info', None)
         self._loader = TrackLoader(self.engine, track.filepath, sacd_track_info=sacd_info)
         self._loader.loaded.connect(self._on_track_loaded)
@@ -1570,6 +1618,12 @@ class HiFiPlayer(QMainWindow):
         self._loader.start()
 
     def _on_track_loaded(self, info: dict):
+        # 로딩 중 다른 곡이 요청됐으면 이 결과는 버리고 그 곡을 로드
+        if getattr(self, '_pending_load', None) is not None:
+            nxt = self._pending_load
+            self._pending_load = None
+            self._load_and_play(nxt)
+            return
         self.current_info = info
         self._reset_authenticity()
         self.btn_play.setEnabled(True)
@@ -1811,31 +1865,19 @@ class HiFiPlayer(QMainWindow):
         self.lbl_album.setText(album)
 
         # 앨범아트 → 있으면 lbl_cover 표시, 없으면 CD 애니메이션
-        # 태그에 아트가 없으면 트랙 폴더의 이미지 파일에서 폴백 (ISO·DSD 포함)
-        if not info.get('cover_data'):
-            fp = info.get('filepath', '') or ''
-            if fp:
-                try:
-                    info['cover_data'] = AudioEngine._folder_cover(fp)
-                except Exception:
-                    pass
         cover_data = info.get('cover_data', None)
         if cover_data:
-            px = QPixmap()
-            if px.loadFromData(cover_data):
-                # 440×440 꽉 채우기 (중앙 크롭)
-                ART = 440
-                px = px.scaled(ART, ART, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-                if px.width() > ART or px.height() > ART:
-                    x = (px.width()  - ART) // 2
-                    y = (px.height() - ART) // 2
-                    px = px.copy(x, y, ART, ART)
-                self.lbl_cover.setPixmap(px)
-                self.art_stack.setCurrentIndex(1)
-            else:
-                self.art_stack.setCurrentIndex(0)
+            self._apply_cover(QImage.fromData(cover_data))
         else:
             self.art_stack.setCurrentIndex(0)
+            if hasattr(self, 'mini_art'):
+                self.mini_art.setPixmap(QPixmap())
+            # 태그에 아트가 없으면 트랙 폴더의 이미지 파일에서 폴백 (ISO·DSD 포함)
+            # — 폴더 검색·이미지 디코딩은 백그라운드 (메인 스레드 정지 방지)
+            fp = info.get('filepath', '') or ''
+            if fp:
+                threading.Thread(target=self._find_folder_cover, args=(fp,),
+                                 daemon=True).start()
 
         ch_str = {1: "Mono", 2: "Stereo", 4: "4ch", 6: "5.1ch", 8: "7.1ch"}.get(ch, f"{ch}ch")
 
@@ -1935,16 +1977,45 @@ class HiFiPlayer(QMainWindow):
         # ── 미니플레이어 동기화 ──────────────────────────────────
         self.mini_title.setText(title or '제목 없음')
         self.mini_artist.setText(artist if artist else (album if album else ' '))
-        # 앨범아트
-        cover_data = info.get('cover_data', None)
-        if cover_data:
-            px2 = QPixmap()
-            if px2.loadFromData(cover_data):
-                self.mini_art.setPixmap(
-                    px2.scaled(52, 52, Qt.KeepAspectRatioByExpanding,
-                               Qt.SmoothTransformation))
-        else:
-            self.mini_art.setPixmap(QPixmap())
+        # (앨범아트는 _apply_cover에서 메인·미니 동시 반영)
+
+    def _apply_cover(self, img):
+        """QImage → 메인 아트(440 중앙 크롭) + 미니 아트(52) 반영"""
+        if img is None or img.isNull():
+            self.art_stack.setCurrentIndex(0)
+            return
+        ART = 440
+        px = QPixmap.fromImage(img)
+        px = px.scaled(ART, ART, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        if px.width() > ART or px.height() > ART:
+            x = (px.width()  - ART) // 2
+            y = (px.height() - ART) // 2
+            px = px.copy(x, y, ART, ART)
+        self.lbl_cover.setPixmap(px)
+        self.art_stack.setCurrentIndex(1)
+        if hasattr(self, 'mini_art'):
+            self.mini_art.setPixmap(
+                px.scaled(52, 52, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+
+    def _find_folder_cover(self, fp: str):
+        """[백그라운드] 폴더 이미지 검색 + 디코딩·축소 후 시그널로 전달"""
+        try:
+            data = AudioEngine._folder_cover(fp)
+            if not data:
+                return
+            img = QImage.fromData(data)
+            if img.isNull():
+                return
+            if img.width() > 1200 or img.height() > 1200:   # 대형 스캔 이미지 축소
+                img = img.scaled(1200, 1200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self._cover_signal.emit(img, fp)
+        except Exception:
+            pass
+
+    def _on_folder_cover(self, img, fp: str):
+        # 그사이 곡이 바뀌었으면 무시
+        if (self.current_info or {}).get('filepath', '') == fp:
+            self._apply_cover(img)
 
     def _highlight_current(self):
         """현재 재생 중인 트랙 강조 — 델리게이트가 색상을 처리하므로 repaint만."""
@@ -1952,6 +2023,11 @@ class HiFiPlayer(QMainWindow):
         self.playlist.viewport().update()
 
     def _on_error(self, msg: str):
+        if getattr(self, '_pending_load', None) is not None:
+            nxt = self._pending_load
+            self._pending_load = None
+            self._load_and_play(nxt)
+            return
         self.btn_play.set_icon("play")
         self.btn_play.setEnabled(True)
         self.lbl_title.setText(f"오류: {msg}")
@@ -2013,7 +2089,7 @@ class HiFiPlayer(QMainWindow):
             # ── 3. 타이틀 폰트 모던하게 (Segoe UI Light) ──────────
             # Windows 타이틀바 폰트는 OS 설정이라 앱에서 직접 변경 불가
             # 대신 타이틀 텍스트를 심플하게 변경
-            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.15")
+            self.setWindowTitle("Nikon Chinge HiFi Player - Spatial v1.8.16")
 
         except Exception:
             pass
