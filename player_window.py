@@ -1060,8 +1060,7 @@ class HiFiPlayer(QMainWindow):
     def _add_folder_with_sep(self, folder_name: str, files: list):
         """드래그로 폴더 드롭 시 — 구분선 삽입 후 파일 추가."""
         if files:
-            self._insert_folder_separator(folder_name)
-            self._add_file_list(files)
+            self._enqueue_add([('sep', folder_name)] + [('file', f) for f in files])
 
     def _add_folder(self):
         dirpath = QFileDialog.getExistingDirectory(self, "폴더 추가", "")
@@ -1101,7 +1100,7 @@ class HiFiPlayer(QMainWindow):
         if not paths:
             return
         before = self.playlist.count()
-        self._add_file_list(sorted(paths, key=natural_sort_key))
+        self._add_file_list(sorted(paths, key=natural_sort_key), deferred=False)
         if self.playlist.count() > before:
             self._load_and_play(before)          # 새로 추가된 첫 트랙 재생
             return
@@ -1113,39 +1112,78 @@ class HiFiPlayer(QMainWindow):
                 self._load_and_play(i)
                 return
 
-    def _add_file_list(self, paths: list):
-        # 이미 추가된 경로 집합
+    def _add_file_list(self, paths: list, deferred: bool = True):
+        """파일 추가.
+
+        deferred=True(드롭·대화상자·폴더): 큐에 넣고 타이머로 소량씩 처리.
+          드롭 이벤트 안에서 processEvents()로 장시간 처리하면 Windows에서
+          DnD 세션이 끊겨 추가가 중단되거나(기존 리스트에 추가 불가),
+          재진입으로 목록이 중간에 잘리던 문제의 수정.
+        deferred=False(외부 열기): 즉시 동기 추가 (호출 측이 곧바로 재생).
+        """
+        if not paths:
+            return
+        if not deferred:
+            self._add_paths_now(paths)
+            return
+        self._enqueue_add([('file', p) for p in paths])
+
+    def _enqueue_add(self, entries: list):
+        if not hasattr(self, '_add_queue'):
+            self._add_queue = []
+        self._add_queue.extend(entries)
+        if not getattr(self, '_add_draining', False):
+            self._add_draining = True
+            QTimer.singleShot(0, self._drain_add_queue)
+
+    def _drain_add_queue(self):
+        """큐에서 최대 40개씩 꺼내 추가 → 남으면 다음 이벤트 루프에서 계속"""
+        try:
+            batch, n = [], 0
+            while self._add_queue and n < 40:
+                kind, val = self._add_queue.pop(0)
+                if kind == 'sep':
+                    if batch:
+                        self._add_paths_now(batch); batch = []
+                    self._insert_folder_separator(val)
+                else:
+                    batch.append(val)
+                n += 1
+            if batch:
+                self._add_paths_now(batch)
+        except Exception as e:
+            print(f"[Playlist] 추가 중 오류: {e}")
+        finally:
+            if getattr(self, '_add_queue', None):
+                QTimer.singleShot(0, self._drain_add_queue)
+            else:
+                self._add_draining = False
+
+    def _add_paths_now(self, paths: list):
+        """동기 추가 본체 — 이벤트 재진입 없음, 파일 하나의 오류가 배치를 막지 않음"""
         existing = set()
         for i in range(self.playlist.count()):
             t = self._track_at(i)
             if t:
                 existing.add(t.filepath)
 
-        new_paths = [p for p in paths if p not in existing]
-        if not new_paths:
-            return
-
-        # 배치로 추가 — QApplication.processEvents()로 UI 블로킹 방지
-        from PyQt5.QtWidgets import QApplication
-        for i, path in enumerate(new_paths):
-            # ISO 파일은 트랙 목록으로 펼쳐서 추가 (다이얼로그 없이 전체 자동 추가)
-            if path.lower().endswith('.iso'):
-                self._add_sacd_iso_tracks(path, show_dialog=False)
-                existing.add(path)
+        for path in paths:
+            if path in existing:
                 continue
-
-            track = TrackItem(path)
             existing.add(path)
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole + 1, track)
-            self._update_list_item(item, track)
-            self.playlist.addItem(item)
-            # 10개마다 UI 갱신 — 마지막 아이템도 확실히 렌더링
-            if i % 10 == 9:
-                QApplication.processEvents()
+            try:
+                if path.lower().endswith('.iso'):
+                    # ISO 파일은 트랙 목록으로 펼쳐서 추가
+                    self._add_sacd_iso_tracks(path, show_dialog=False)
+                    continue
+                track = TrackItem(path)
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole + 1, track)
+                self._update_list_item(item, track)
+                self.playlist.addItem(item)
+            except Exception as e:
+                print(f"[Playlist] 추가 실패: {path} ({e})")
 
-        # 추가 완료 후 한 번 더 갱신
-        QApplication.processEvents()
         self.drop_hint.setVisible(self.playlist.count() == 0)
 
         # 첫 파일 추가 시 자동 선택 (구분선 건너뜀)
@@ -1279,15 +1317,12 @@ class HiFiPlayer(QMainWindow):
 
         # 리스트 재구성
         self.playlist.clear()
-        from PyQt5.QtWidgets import QApplication
-        for i, (track, _) in enumerate(items_data):
+        for track, _ in items_data:
             if track is None:
                 continue
             item = QListWidgetItem()
             self._update_list_item(item, track)
             self.playlist.addItem(item)
-            if i % 20 == 19:
-                QApplication.processEvents()
 
         # 재생 중이던 곡 위치 복원
         self.current_index = -1
