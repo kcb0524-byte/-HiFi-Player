@@ -1387,8 +1387,11 @@ class HiFiPlayer(QMainWindow):
         self.btn_play.setEnabled(False)
 
         # 백그라운드 로드
+        # 로딩 중이면 terminate() 대신 대기열 (잠금 쥔 채 종료 → UI 영구 정지 방지)
         if self._loader and self._loader.isRunning():
-            self._loader.terminate()
+            self._pending_load = index
+            return
+        self._pending_load = None
         sacd_info = getattr(track, '_sacd_track_info', None)
         self._loader = TrackLoader(self.engine, track.filepath, sacd_track_info=sacd_info)
         self._loader.loaded.connect(self._on_track_loaded)
@@ -1396,6 +1399,9 @@ class HiFiPlayer(QMainWindow):
         self._loader.start()
 
     def _on_track_loaded(self, info: dict):
+        if getattr(self, '_pending_load', None) is not None:
+            nxt = self._pending_load; self._pending_load = None
+            self._load_and_play(nxt); return
         self.current_info = info
         self.btn_play.setEnabled(True)
         self._update_info_display(info)
@@ -1781,6 +1787,9 @@ class HiFiPlayer(QMainWindow):
         self.playlist.viewport().update()
 
     def _on_error(self, msg: str):
+        if getattr(self, '_pending_load', None) is not None:
+            nxt = self._pending_load; self._pending_load = None
+            self._load_and_play(nxt); return
         self.btn_play.set_icon("play")
         self.btn_play.setEnabled(True)
         self.lbl_title.setText(f"오류: {msg}")
