@@ -82,6 +82,7 @@ class HiFiPlayer(QMainWindow):
     _freq_signal = pyqtSignal(list)
     _auth_signal = pyqtSignal(dict)
     _cover_signal = pyqtSignal(object, str)   # (QImage, filepath) — 폴더 아트 백그라운드 결과
+    _meta_signal = pyqtSignal(object)         # TrackItem — 백그라운드 태그 로딩 완료
 
     SETTINGS_FILE = str(Path.home() / '.hifi_player_settings.json')
 
@@ -210,6 +211,7 @@ class HiFiPlayer(QMainWindow):
         self.engine.on_chunk_ready = chunk_cb
         self._auth_signal.connect(self._on_auth_result)
         self._cover_signal.connect(self._on_folder_cover)
+        self._meta_signal.connect(self._on_meta_loaded)
 
         # ── UI 정지(무지개 커서) 감시: 메인 스레드가 4초 이상 멈추면
         #    모든 스레드의 스택을 ~/.hifi_player_ui_stall.log 에 기록 ──
@@ -218,6 +220,26 @@ class HiFiPlayer(QMainWindow):
         self._wd_timer.timeout.connect(self._ui_heartbeat)
         self._wd_timer.start(500)
         threading.Thread(target=self._ui_watchdog, daemon=True).start()
+
+    def _meta_worker(self, tracks: list):
+        """[백그라운드] 파일 존재 확인 + 태그 읽기 → 곡별로 시그널"""
+        for t in tracks:
+            try:
+                t.missing = not os.path.exists(t.filepath)
+                if not t.missing and not t.meta_loaded:
+                    t._load_quick_meta()
+                t.meta_loaded = True
+            except Exception:
+                pass
+            self._meta_signal.emit(t)
+
+    def _on_meta_loaded(self, track):
+        """메인 스레드: 해당 곡 행 표시 갱신"""
+        for i in range(self.playlist.count()):
+            item = self.playlist.item(i)
+            if item is not None and item.data(Qt.UserRole + 1) is track:
+                self._update_list_item(item, track, missing=track.missing)
+                break
 
     def _ui_heartbeat(self):
         self._ui_alive = time.monotonic()
@@ -1420,6 +1442,7 @@ class HiFiPlayer(QMainWindow):
             if t:
                 existing.add(t.filepath)
 
+        pending_meta = []
         for path in paths:
             if path in existing:
                 continue
@@ -1429,14 +1452,18 @@ class HiFiPlayer(QMainWindow):
                     # ISO 파일은 트랙 목록으로 펼쳐서 추가
                     self._add_sacd_iso_tracks(path, show_dialog=False)
                     continue
-                track = TrackItem(path)
+                track = TrackItem(path, lazy=True)   # 태그는 백그라운드에서
                 item = QListWidgetItem()
                 item.setData(Qt.UserRole + 1, track)
                 self._update_list_item(item, track)
                 self.playlist.addItem(item)
+                pending_meta.append(track)
             except Exception as e:
                 print(f"[Playlist] 추가 실패: {path} ({e})")
 
+        if pending_meta:
+            threading.Thread(target=self._meta_worker, args=(pending_meta,),
+                             daemon=True).start()
         self.drop_hint.setVisible(self.playlist.count() == 0)
 
         # 첫 파일 추가 시 자동 선택 (구분선 건너뜀)
@@ -2439,13 +2466,17 @@ class HiFiPlayer(QMainWindow):
             playlist_paths = data.get('playlist', [])
             saved_index    = data.get('current_index', -1)
             if playlist_paths:
+                restored = []
                 for path in playlist_paths:
-                    track   = TrackItem(path)
+                    track   = TrackItem(path, lazy=True)
                     item    = QListWidgetItem()
                     item.setData(Qt.UserRole + 1, track)
-                    missing = not os.path.exists(path)
-                    self._update_list_item(item, track, missing=missing)
+                    self._update_list_item(item, track)
                     self.playlist.addItem(item)
+                    restored.append(track)
+                # 파일 존재 확인·태그 읽기는 백그라운드 (시작 시 외장 드라이브 대기로 멈추지 않도록)
+                threading.Thread(target=self._meta_worker, args=(restored,),
+                                 daemon=True).start()
                 self.drop_hint.setVisible(False)
                 # 마지막 재생 위치 선택 (재생은 안 함)
                 if 0 <= saved_index < self.playlist.count():

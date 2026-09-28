@@ -1499,7 +1499,7 @@ class VUMeter(QWidget):
 # 플레이리스트 아이템
 # ─────────────────────────────────────────────────────────────
 class TrackItem:
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, lazy: bool = False):
         self.filepath = filepath
         self.title = ''
         self.artist = ''
@@ -1508,12 +1508,19 @@ class TrackItem:
         self.format = Path(filepath).suffix.upper().lstrip('.')
         self.is_dsd = Path(filepath).suffix.lower() in ('.dsf', '.dff')
         self._sacd_track_info: Optional[dict] = None  # SACD ISO 트랙 정보 (None = 일반 파일)
+        self.missing = False        # 파일 부재 여부 — 백그라운드에서 갱신 (paint에서 디스크 접근 금지)
+        self.meta_loaded = False
         # ISO 파일은 mutagen 파싱 불필요 (트랙 정보는 sacd_decoder에서 처리)
         if filepath.lower().endswith('.iso'):
             self.title = Path(filepath).stem
             self.format = 'SACD'
+            self.meta_loaded = True
+        elif lazy:
+            # 태그는 나중에 백그라운드 스레드가 읽음 (메인 스레드 정지 방지)
+            self.title = Path(filepath).stem
         else:
             self._load_quick_meta()
+            self.meta_loaded = True
 
     def _load_quick_meta(self):
         """빠른 메타데이터 로드 (재생 없이)"""
@@ -1731,7 +1738,7 @@ class PlaylistDelegate(QStyledItemDelegate):
         )
         is_selected = bool(option.state & QStyle.State_Selected)
         is_hover    = bool(option.state & QStyle.State_MouseOver)
-        is_missing  = track is not None and not os.path.exists(track.filepath)
+        is_missing  = track is not None and getattr(track, 'missing', False)   # 디스크 접근 없음
 
         rw   = rect.width()
 
