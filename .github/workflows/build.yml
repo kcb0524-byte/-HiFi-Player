@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ main, spatial, dedication-eousukon ]
+    branches: [ main, spatial, dedication-eousukon, dgu-nsa ]
   workflow_dispatch:
 
 jobs:
@@ -58,7 +58,7 @@ jobs:
       - name: PyInstaller 빌드
         run: |
           pyinstaller `
-            --name "ESKHiFiMusicPlayer" `
+            --name "DGU-NSA-HiFiMusicPlayer" `
             --windowed `
             --icon icon.ico `
             --add-data "constants.py;." `
@@ -111,14 +111,14 @@ jobs:
 
       - name: scipy 테스트 파일 제거 (용량 최적화)
         run: |
-          Get-ChildItem -Path "dist\ESKHiFiMusicPlayer\_internal" -Recurse -Directory -Filter "tests" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path "dist\DGU-NSA-HiFiMusicPlayer\_internal" -Recurse -Directory -Filter "tests" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         shell: powershell
 
       - name: 번들 필수 라이브러리 검증 (누락 시 빌드 실패)
         shell: pwsh
         run: |
           # miniaudio 누락으로 무음 앱이 배포됐던 사고 재발 방지 검사
-          $root = "dist/ESKHiFiMusicPlayer"
+          $root = "dist/DGU-NSA-HiFiMusicPlayer"
           $checks = [ordered]@{
             "miniaudio 네이티브" = "_miniaudio*"
             "libsndfile"         = "libsndfile*"
@@ -147,13 +147,13 @@ jobs:
           $iss = @"
           #pragma encoding "utf-8"
           [Setup]
-          AppName=Eou, Sukon's HiFi Music Player
+          AppName=DGU-NSA HiFi Music Player
           AppVersion=1.8.16
           AppPublisher=Choongbae Kim
-          DefaultDirName={autopf}\Eou Sukon HiFi Player
-          DefaultGroupName=Eou Sukon HiFi Player
+          DefaultDirName={autopf}\DGU-NSA HiFi Player
+          DefaultGroupName=DGU-NSA HiFi Player
           OutputDir=dist
-          OutputBaseFilename=ESKHiFiMusicPlayer_Setup_1.8.16
+          OutputBaseFilename=DGU-NSA-HiFiMusicPlayer_Setup_1.8.16
           SetupIconFile=icon.ico
           Compression=lzma2
           SolidCompression=yes
@@ -167,36 +167,36 @@ jobs:
           Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional tasks:"
 
           [Files]
-          Source: "dist\ESKHiFiMusicPlayer\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          Source: "dist\DGU-NSA-HiFiMusicPlayer\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
-          Name: "{group}\Eou, Sukon's HiFi Music Player"; Filename: "{app}\ESKHiFiMusicPlayer.exe"
+          Name: "{group}\DGU-NSA HiFi Music Player"; Filename: "{app}\DGU-NSA-HiFiMusicPlayer.exe"
           Name: "{group}\Uninstall"; Filename: "{uninstallexe}"
-          Name: "{autodesktop}\Eou, Sukon's HiFi Music Player"; Filename: "{app}\ESKHiFiMusicPlayer.exe"; Tasks: desktopicon
+          Name: "{autodesktop}\DGU-NSA HiFi Music Player"; Filename: "{app}\DGU-NSA-HiFiMusicPlayer.exe"; Tasks: desktopicon
 
           [Run]
-          Filename: "{app}\ESKHiFiMusicPlayer.exe"; Description: "Launch Eou, Sukon's HiFi Music Player"; Flags: nowait postinstall skipifsilent
+          Filename: "{app}\DGU-NSA-HiFiMusicPlayer.exe"; Description: "Launch DGU-NSA HiFi Music Player"; Flags: nowait postinstall skipifsilent
 
           [Registry]
-          Root: HKCR; Subkey: "ESKHiFiMusicPlayer.AudioFile"; ValueType: string; ValueName: ""; ValueData: "Audio File"; Flags: uninsdeletekey
-          Root: HKCR; Subkey: "ESKHiFiMusicPlayer.AudioFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\ESKHiFiMusicPlayer.exe,0"
-          Root: HKCR; Subkey: "ESKHiFiMusicPlayer.AudioFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\ESKHiFiMusicPlayer.exe"" ""%1"""
-          Root: HKCR; Subkey: ".flac\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".wav\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".aiff\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".aif\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".mp3\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".m4a\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".aac\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".ogg\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".opus\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".wv\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".ape\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".tta\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".wma\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".dsf\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".dff\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
-          Root: HKCR; Subkey: ".iso\OpenWithProgids"; ValueType: string; ValueName: "ESKHiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueType: string; ValueName: ""; ValueData: "Audio File"; Flags: uninsdeletekey
+          Root: HKCR; Subkey: "DGU-NSA-HiFiMusicPlayer.AudioFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\DGU-NSA-HiFiMusicPlayer.exe,0"
+          Root: HKCR; Subkey: "DGU-NSA-HiFiMusicPlayer.AudioFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\DGU-NSA-HiFiMusicPlayer.exe"" ""%1"""
+          Root: HKCR; Subkey: ".flac\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wav\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aiff\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aif\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".mp3\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".m4a\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".aac\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".ogg\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".opus\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wv\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".ape\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".tta\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".wma\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".dsf\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".dff\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
+          Root: HKCR; Subkey: ".iso\OpenWithProgids"; ValueType: string; ValueName: "DGU-NSA-HiFiMusicPlayer.AudioFile"; ValueData: ""; Flags: uninsdeletevalue
           "@
           [System.IO.File]::WriteAllText("$PWD\installer_win.iss", $iss, [System.Text.UTF8Encoding]::new($true))
         shell: powershell
@@ -207,8 +207,8 @@ jobs:
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
-          name: windows-installer-eousukon
-          path: dist/ESKHiFiMusicPlayer_Setup_1.8.16.exe
+          name: windows-installer-dgunsa
+          path: dist/DGU-NSA-HiFiMusicPlayer_Setup_1.8.16.exe
           retention-days: 30
 
   # ── macOS 빌드 (Apple Silicon) ─────────────────────────────────
@@ -243,10 +243,10 @@ jobs:
       - name: PyInstaller 빌드
         run: |
           pyinstaller \
-            --name "ESKHiFiMusicPlayer" \
+            --name "DGU-NSA-HiFiMusicPlayer" \
             --windowed \
             --icon icon.icns \
-            --osx-bundle-identifier com.twsemicon.hifi-player-eousukon \
+            --osx-bundle-identifier com.twsemicon.hifi-player-dgunsa \
             --add-data "constants.py:." \
             --add-data "ui_widgets.py:." \
             --add-data "player_window.py:." \
@@ -290,13 +290,13 @@ jobs:
 
       - name: scipy 테스트 파일 제거
         run: |
-          find "dist/ESKHiFiMusicPlayer.app" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          find "dist/ESKHiFiMusicPlayer.app" -name "*.pyx" -delete 2>/dev/null || true
-          find "dist/ESKHiFiMusicPlayer.app" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find "dist/DGU-NSA-HiFiMusicPlayer.app" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find "dist/DGU-NSA-HiFiMusicPlayer.app" -name "*.pyx" -delete 2>/dev/null || true
+          find "dist/DGU-NSA-HiFiMusicPlayer.app" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
       - name: Info.plist 파일 연결(CFBundleDocumentTypes) 등록
         run: |
-          python3 - "dist/ESKHiFiMusicPlayer.app/Contents/Info.plist" <<'PYEOF'
+          python3 - "dist/DGU-NSA-HiFiMusicPlayer.app/Contents/Info.plist" <<'PYEOF'
           import sys, plistlib
           plist_path = sys.argv[1]
           with open(plist_path, 'rb') as f:
@@ -320,13 +320,13 @@ jobs:
           PYEOF
 
       - name: ffmpeg 번들 포함
-        run: cp $(which ffmpeg) "dist/ESKHiFiMusicPlayer.app/Contents/MacOS/ffmpeg"
+        run: cp $(which ffmpeg) "dist/DGU-NSA-HiFiMusicPlayer.app/Contents/MacOS/ffmpeg"
 
       - name: 번들 필수 라이브러리 검증 (누락 시 빌드 실패)
         run: |
           # miniaudio 누락으로 무음 앱이 배포됐던 사고 재발 방지 검사
           # (macOS 재생 장치는 miniaudio 기반 — 없으면 재생 상태만 되고 무음)
-          APP="dist/ESKHiFiMusicPlayer.app"
+          APP="dist/DGU-NSA-HiFiMusicPlayer.app"
           fail=0
           for pat in "_miniaudio*" "libsndfile*" "libportaudio*" "ffmpeg"; do
             hit=$(find "$APP" -name "$pat" | head -1)
@@ -342,18 +342,18 @@ jobs:
       - name: Ad-hoc 코드사이닝
         run: |
           codesign --force --deep --sign - \
-            "dist/ESKHiFiMusicPlayer.app" || true
+            "dist/DGU-NSA-HiFiMusicPlayer.app" || true
 
       - name: DMG 생성
         run: |
-          hdiutil create -volname "Eou Sukon HiFi Player" \
-            -srcfolder "dist/ESKHiFiMusicPlayer.app" \
+          hdiutil create -volname "DGU-NSA HiFi Player" \
+            -srcfolder "dist/DGU-NSA-HiFiMusicPlayer.app" \
             -ov -format UDZO \
-            "dist/ESKHiFiMusicPlayer-1.8.16-arm64.dmg"
+            "dist/DGU-NSA-HiFiMusicPlayer-1.8.16-arm64.dmg"
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg-eousukon
-          path: dist/ESKHiFiMusicPlayer-1.8.16-arm64.dmg
+          name: macos-dmg-dgunsa
+          path: dist/DGU-NSA-HiFiMusicPlayer-1.8.16-arm64.dmg
           retention-days: 30

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
-#  ESKHiFiMusicPlayer — 공간 음향 버전 빌드 스크립트
+#  DGU-NSA-HiFiMusicPlayer — 공간 음향 버전 빌드 스크립트
 #  결과물: dist/Nikon Chinge HiFi Player-1.0.0.dmg
 #
 #  사전 요구사항:
@@ -20,7 +20,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
 # ── 동시 실행 방지 (이중 클릭으로 빌드 2개가 겹치면 서로 파일을 지워 충돌) ──
-LOCK="/tmp/ncmp_esk_build.lock"
+LOCK="/tmp/ncmp_dgunsa_build.lock"
 if ! mkdir "$LOCK" 2>/dev/null; then
   echo ""
   echo "⚠ 이미 다른 빌드가 실행 중입니다. 이 창은 무시하고 닫으셔도 됩니다."
@@ -28,8 +28,8 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
-APP_NAME="ESKHiFiMusicPlayer"
-BUNDLE_ID="com.twsemicon.hifi-player-eousukon"
+APP_NAME="DGU-NSA-HiFiMusicPlayer"
+BUNDLE_ID="com.twsemicon.hifi-player-dgunsa"
 VERSION="1.8.16"
 ICON="icon.icns"
 
@@ -223,8 +223,8 @@ set_plist CFBundleShortVersionString "$VERSION" string
 set_plist CFBundleVersion "$VERSION" string
 set_plist NSHighResolutionCapable true bool
 # Finder/메뉴바 표시 이름을 헌정 문구로
-set_plist CFBundleDisplayName "Eou, Sukon's HiFi Music Player" string
-set_plist CFBundleName "Eou, Sukon's HiFi Music Player" string
+set_plist CFBundleDisplayName "DGU-NSA HiFi Music Player" string
+set_plist CFBundleName "DGU-NSA HiFi Music Player" string
 set_plist LSMinimumSystemVersion "12.0" string
 # NSMicrophoneUsageDescription 제거 — 이 키가 있으면 macOS가 마이크 권한 팝업을 띄움
 # 오디오 출력 전용(OutputStream)이므로 마이크 권한 불필요
@@ -318,7 +318,7 @@ cat > "$INSTALLER" << 'INSTALLER_EOF'
 #  Nikon Chinge HiFi Player — 설치 스크립트
 #  이 파일을 더블클릭하면 자동으로 설치됩니다.
 # ══════════════════════════════════════════════════════
-APP_NAME="ESKHiFiMusicPlayer"
+APP_NAME="DGU-NSA-HiFiMusicPlayer"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_SRC="$SCRIPT_DIR/${APP_NAME}.app"
 APP_DST="/Applications/${APP_NAME}.app"

@@ -158,7 +158,7 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = HiFiApplication(sys.argv)
-    app.setApplicationName("Eou, Sukon's HiFi Music Player")
+    app.setApplicationName("DGU-NSA HiFi Music Player")
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("HiFiPlayer")
 

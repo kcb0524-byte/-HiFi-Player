@@ -47,9 +47,9 @@ from dsd_decoder import DSDDecoder
 
 from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET
 
-# LP 센터 레이블 문구 (에디션별 교체 지점 — 헌정판: EOU SUKON / MUSIC)
-LP_LABEL_TOP = "EOU SUKON"
-LP_LABEL_SUB = "MUSIC"
+# LP 센터 레이블 문구 (에디션별 교체 지점 — DGU-NSA판: DGU-NSA / Music)
+LP_LABEL_TOP = "DGU-NSA"
+LP_LABEL_SUB = "Music"
 
 
 class TrackLoader(QThread):
