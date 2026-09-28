@@ -47,6 +47,11 @@ from dsd_decoder import DSDDecoder
 
 from constants import DARK, EQ_PRESETS, EQ_BAND_LABELS, STYLESHEET
 
+# LP 센터 레이블 문구 (에디션별 교체 지점 — 헌정판: EOU SUKON / MUSIC)
+LP_LABEL_TOP = "ZUNAS"
+LP_LABEL_SUB = "Player"
+
+
 class TrackLoader(QThread):
     loaded = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -242,36 +247,43 @@ class CDWidget(QWidget):
         # ── 4. 센터 레이블 (골드 톤 원형) ───────────────────────
         lr = int(r * 0.28)
         label_grad = QRadialGradient(-lr * 0.25, -lr * 0.3, lr * 1.3)
-        label_grad.setColorAt(0.00, QColor(210, 175,  80))
-        label_grad.setColorAt(0.40, QColor(185, 145,  55))
-        label_grad.setColorAt(0.75, QColor(160, 120,  35))
-        label_grad.setColorAt(1.00, QColor(130,  95,  20))
+        label_grad.setColorAt(0.00, QColor(DARK['accent2']))
+        label_grad.setColorAt(0.40, QColor(DARK['accent']))
+        label_grad.setColorAt(0.75, QColor(DARK['accent']).darker(125))
+        label_grad.setColorAt(1.00, QColor(DARK['accent']).darker(165))
         p.setBrush(label_grad)
-        p.setPen(QPen(QColor(100, 75, 15), 1))
+        p.setPen(QPen(QColor(DARK['accent']).darker(210), 1))
         p.drawEllipse(QPoint(0, 0), lr, lr)
 
         # ── 5. 레이블 텍스트 — LP와 함께 회전 ──────────────────
-        # 상단: ZUNAS, 하단: Player  (구멍 위/아래로 충분히 분리)
+        # 상단/하단 문구는 모듈 상수 (헌정판 등 에디션별 교체 지점)
         fnt_top = QFont('Arial', max(5, int(lr * 0.30)), QFont.Bold)
         fnt_sub = QFont('Arial', max(4, int(lr * 0.24)))
+        # 레이블 원 지름 안에 들어가도록 폭 기준 자동 축소
+        while (fnt_top.pointSize() > 4
+               and QFontMetrics(fnt_top).horizontalAdvance(LP_LABEL_TOP) > lr * 1.7):
+            fnt_top.setPointSize(fnt_top.pointSize() - 1)
+        while (fnt_sub.pointSize() > 4
+               and QFontMetrics(fnt_sub).horizontalAdvance(LP_LABEL_SUB) > lr * 1.7):
+            fnt_sub.setPointSize(fnt_sub.pointSize() - 1)
         fm_top = QFontMetrics(fnt_top)
         fm_sub = QFontMetrics(fnt_sub)
         hole_r = int(r * 0.055)  # 구멍 반지름 (6번 단계와 동일 비율)
 
-        # ZUNAS — 구멍 위쪽, 여유 있게
+        # 상단 문구 — 구멍 위쪽, 여유 있게
         p.setFont(fnt_top)
-        p.setPen(QColor(45, 28, 5))
-        tw = fm_top.horizontalAdvance("ZUNAS")
+        p.setPen(QColor(DARK['accent']).darker(400))
+        tw = fm_top.horizontalAdvance(LP_LABEL_TOP)
         # 텍스트 baseline이 구멍 상단에서 4px 위에 오도록
         y_top = -(hole_r + 4 + fm_top.descent())
-        p.drawText(int(-tw / 2), y_top, "ZUNAS")
+        p.drawText(int(-tw / 2), y_top, LP_LABEL_TOP)
 
-        # Player — 구멍 아래쪽, 여유 있게
+        # 하단 문구 — 구멍 아래쪽, 여유 있게
         p.setFont(fnt_sub)
-        p.setPen(QColor(70, 48, 12))
-        tw2 = fm_sub.horizontalAdvance("Player")
+        p.setPen(QColor(DARK['accent']).darker(260))
+        tw2 = fm_sub.horizontalAdvance(LP_LABEL_SUB)
         y_bot = hole_r + 4 + fm_sub.ascent()
-        p.drawText(int(-tw2 / 2), y_bot, "Player")
+        p.drawText(int(-tw2 / 2), y_bot, LP_LABEL_SUB)
 
         # ── 6. 중앙 스핀들 구멍 ─────────────────────────────────
         hole_r = int(r * 0.055)
@@ -1487,7 +1499,7 @@ class VUMeter(QWidget):
 # 플레이리스트 아이템
 # ─────────────────────────────────────────────────────────────
 class TrackItem:
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, lazy: bool = False):
         self.filepath = filepath
         self.title = ''
         self.artist = ''
@@ -1496,12 +1508,19 @@ class TrackItem:
         self.format = Path(filepath).suffix.upper().lstrip('.')
         self.is_dsd = Path(filepath).suffix.lower() in ('.dsf', '.dff')
         self._sacd_track_info: Optional[dict] = None  # SACD ISO 트랙 정보 (None = 일반 파일)
+        self.missing = False        # 파일 부재 여부 — 백그라운드에서 갱신 (paint에서 디스크 접근 금지)
+        self.meta_loaded = False
         # ISO 파일은 mutagen 파싱 불필요 (트랙 정보는 sacd_decoder에서 처리)
         if filepath.lower().endswith('.iso'):
             self.title = Path(filepath).stem
             self.format = 'SACD'
+            self.meta_loaded = True
+        elif lazy:
+            # 태그는 나중에 백그라운드 스레드가 읽음 (메인 스레드 정지 방지)
+            self.title = Path(filepath).stem
         else:
             self._load_quick_meta()
+            self.meta_loaded = True
 
     def _load_quick_meta(self):
         """빠른 메타데이터 로드 (재생 없이)"""
@@ -1719,7 +1738,7 @@ class PlaylistDelegate(QStyledItemDelegate):
         )
         is_selected = bool(option.state & QStyle.State_Selected)
         is_hover    = bool(option.state & QStyle.State_MouseOver)
-        is_missing  = track is not None and not os.path.exists(track.filepath)
+        is_missing  = track is not None and getattr(track, 'missing', False)   # 디스크 접근 없음
 
         rw   = rect.width()
 
@@ -1887,7 +1906,7 @@ class PlaylistWidget(QListWidget):
     # ── 드래그 자동 스크롤 속도 (OS별 최적화) ──
     # 같은 수치라도 Windows가 체감상 빠르게 느껴져 플랫폼별로 분리.
     #   macOS  : 최대 267px/s — 답답하지 않게
-    #   Windows: 최대  83px/s — 위치 잡기 쉽게
+    #   Windows: 최대  83px/s — 위치 잡기 쉽게 (지인 요청)
     SCROLL_ZONE = 36    # px — 이 범위 안에서 자동 스크롤
     if sys.platform == 'win32':
         SCROLL_MIN  = 1   # px/tick — 존 가장자리 (아주 느리게 시작)

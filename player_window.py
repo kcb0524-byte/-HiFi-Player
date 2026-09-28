@@ -72,6 +72,7 @@ def _apply_click_jump(slider: QSlider):
 
 
 class HiFiPlayer(QMainWindow):
+    _meta_signal = pyqtSignal(object)         # TrackItem — 백그라운드 태그 로딩 완료
     _position_signal = pyqtSignal(float, float)
     _finished_signal = pyqtSignal()
     _error_signal = pyqtSignal(str)
@@ -112,6 +113,7 @@ class HiFiPlayer(QMainWindow):
         self._pos_timer = QTimer(self)
         self._pos_timer.timeout.connect(self._update_position_display)
         self._pos_timer.start(200)
+        self._meta_signal.connect(self._on_meta_loaded)
 
     # ─────────────────────────────────────────────
     # 엔진 콜백 연결 (스레드 안전)
@@ -1167,6 +1169,7 @@ class HiFiPlayer(QMainWindow):
             if t:
                 existing.add(t.filepath)
 
+        pending_meta = []
         for path in paths:
             if path in existing:
                 continue
@@ -1176,14 +1179,18 @@ class HiFiPlayer(QMainWindow):
                     # ISO 파일은 트랙 목록으로 펼쳐서 추가
                     self._add_sacd_iso_tracks(path, show_dialog=False)
                     continue
-                track = TrackItem(path)
+                track = TrackItem(path, lazy=True)   # 태그는 백그라운드에서
                 item = QListWidgetItem()
                 item.setData(Qt.UserRole + 1, track)
                 self._update_list_item(item, track)
                 self.playlist.addItem(item)
+                pending_meta.append(track)
             except Exception as e:
                 print(f"[Playlist] 추가 실패: {path} ({e})")
 
+        if pending_meta:
+            threading.Thread(target=self._meta_worker, args=(pending_meta,),
+                             daemon=True).start()
         self.drop_hint.setVisible(self.playlist.count() == 0)
 
         # 첫 파일 추가 시 자동 선택 (구분선 건너뜀)
@@ -1192,6 +1199,26 @@ class HiFiPlayer(QMainWindow):
                 if not self._is_separator(r):
                     self.playlist.setCurrentRow(r)
                     break
+
+    def _meta_worker(self, tracks: list):
+        """[백그라운드] 파일 존재 확인 + 태그 읽기 → 곡별로 시그널"""
+        for t in tracks:
+            try:
+                t.missing = not os.path.exists(t.filepath)
+                if not t.missing and not t.meta_loaded:
+                    t._load_quick_meta()
+                t.meta_loaded = True
+            except Exception:
+                pass
+            self._meta_signal.emit(t)
+
+    def _on_meta_loaded(self, track):
+        """메인 스레드: 해당 곡 행 표시 갱신"""
+        for i in range(self.playlist.count()):
+            item = self.playlist.item(i)
+            if item is not None and item.data(Qt.UserRole + 1) is track:
+                self._update_list_item(item, track, missing=track.missing)
+                break
 
     def _remove_track(self, row: int):
         """트랙 제거 — current_index 보정 (구분선은 무시)"""
@@ -2135,13 +2162,16 @@ class HiFiPlayer(QMainWindow):
             playlist_paths = data.get('playlist', [])
             saved_index    = data.get('current_index', -1)
             if playlist_paths:
+                restored = []
                 for path in playlist_paths:
-                    track   = TrackItem(path)
+                    track   = TrackItem(path, lazy=True)
                     item    = QListWidgetItem()
                     item.setData(Qt.UserRole + 1, track)
-                    missing = not os.path.exists(path)
-                    self._update_list_item(item, track, missing=missing)
+                    self._update_list_item(item, track)
                     self.playlist.addItem(item)
+                    restored.append(track)
+                threading.Thread(target=self._meta_worker, args=(restored,),
+                                 daemon=True).start()
                 self.drop_hint.setVisible(False)
                 # 마지막 재생 위치 선택 (재생은 안 함)
                 if 0 <= saved_index < self.playlist.count():
