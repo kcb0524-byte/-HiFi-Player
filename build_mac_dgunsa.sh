@@ -30,7 +30,7 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 APP_NAME="DGU-NSA-HiFiMusicPlayer"
 BUNDLE_ID="com.twsemicon.hifi-player-dgunsa"
-VERSION="1.8.17"
+VERSION="1.8.18"
 ICON="icon.icns"
 
 # ── Python 환경 확인 및 통일 ─────────────────────────────────────

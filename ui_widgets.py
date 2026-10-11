@@ -1963,15 +1963,24 @@ class PlaylistWidget(QListWidget):
         if self._drop_hint_widget is not None:
             self._drop_hint_widget.setGeometry(0, 0, self.width(), self.height())
 
+    @staticmethod
+    def _accept_external(event):
+        """탐색기/Finder에서 온 파일 드래그를 '복사' 동작으로 명시 수락.
+        Windows는 외부 드래그를 CopyAction으로 제안하는데, 리스트 기본 동작이
+        MoveAction(내부 재정렬용)이라 acceptProposedAction()이 거부되어
+        금지(🚫) 커서가 뜨고 드롭이 안 되던 문제의 수정."""
+        event.setDropAction(Qt.CopyAction)
+        event.accept()
+
     def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+        if event.mimeData().hasUrls() and event.source() is not self:
+            self._accept_external(event)
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+        if event.mimeData().hasUrls() and event.source() is not self:
+            self._accept_external(event)
         else:
             super().dragMoveEvent(event)
         # ── 자동 스크롤 ──────────────────────────────
@@ -2001,7 +2010,8 @@ class PlaylistWidget(QListWidget):
 
     def dropEvent(self, event: QDropEvent):
         self._stop_scroll()
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() and event.source() is not self:
+            event.setDropAction(Qt.CopyAction)
             loose_files = []
             for url in event.mimeData().urls():
                 path = url.toLocalFile()
@@ -2015,7 +2025,7 @@ class PlaylistWidget(QListWidget):
             if loose_files:
                 # OS가 주는 드롭 순서는 선택 순서라 뒤죽박죽 — 파일명 자연 정렬
                 self.files_dropped.emit(sorted(loose_files, key=natural_sort_key))
-            event.acceptProposedAction()
+            event.accept()
         else:
             # 내부 재정렬: OS가 복사를 제안해도 '이동'으로 강제 (복제 버그 수정)
             if event.source() is self:
